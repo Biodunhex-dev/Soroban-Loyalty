@@ -1,4 +1,5 @@
 #![no_std]
+#![allow(deprecated)] // soroban_sdk::events::Events::publish is deprecated in 25.x; kept for API compatibility
 
 use soroban_sdk::{
     contract, contractimpl, contracttype, symbol_short, Address, Bytes, Env, Symbol,
@@ -43,6 +44,13 @@ pub enum DataKey {
 
 const CAMPAIGN_CREATED: Symbol = symbol_short!("CAM_CRT");
 const CAMPAIGN_DEACTIVATED: Symbol = symbol_short!("CAM_DEACT");
+const UPGRADE_PROPOSED: Symbol = symbol_short!("UPG_PROP");
+const UPGRADE_AUTHORIZED: Symbol = symbol_short!("UPG_AUTH");
+const UPGRADE_EXECUTED: Symbol = symbol_short!("UPG_EXEC");
+const UPGRADE_CANCELLED: Symbol = symbol_short!("UPG_CNCL");
+
+/// 48-hour timelock for upgrades (in seconds).
+const TIMELOCK: u64 = 172_800;
 
 // ── Contract ──────────────────────────────────────────────────────────────────
 
@@ -56,27 +64,27 @@ impl CampaignContract {
             panic!("already initialized");
         }
         assert!(threshold > 0, "threshold must be positive");
-        assert!(admins.len() >= threshold, "insufficient admins for threshold");
+        assert!(
+            admins.len() >= threshold,
+            "insufficient admins for threshold"
+        );
 
         env.storage().instance().set(&DataKey::Admins, &admins);
-        env.storage().instance().set(&DataKey::Threshold, &threshold);
+        env.storage()
+            .instance()
+            .set(&DataKey::Threshold, &threshold);
         env.storage().instance().set(&DataKey::NextId, &1_u64);
     }
 
     // ── Helpers ───────────────────────────────────────────────────────────────
 
     fn next_id(env: &Env) -> u64 {
-        env.storage()
-            .instance()
-            .get(&DataKey::NextId)
-            .unwrap_or(1)
+        env.storage().instance().get(&DataKey::NextId).unwrap_or(1)
     }
 
     fn bump_id(env: &Env) -> u64 {
         let id = Self::next_id(env);
-        env.storage()
-            .instance()
-            .set(&DataKey::NextId, &(id + 1));
+        env.storage().instance().set(&DataKey::NextId, &(id + 1));
         id
     }
 
@@ -145,10 +153,7 @@ impl CampaignContract {
     /// Called by the rewards contract to increment the claim counter.
     pub fn record_claim(env: Env, campaign_id: u64) {
         let mut campaign = Self::get_campaign_internal(&env, campaign_id);
-        campaign.total_claimed = campaign
-            .total_claimed
-            .checked_add(1)
-            .expect("overflow");
+        campaign.total_claimed = campaign.total_claimed.checked_add(1).expect("overflow");
         env.storage()
             .persistent()
             .set(&DataKey::Campaign(campaign_id), &campaign);
@@ -193,7 +198,9 @@ impl CampaignContract {
             signatures,
         };
 
-        env.storage().instance().set(&DataKey::UpgradeProposal, &proposal);
+        env.storage()
+            .instance()
+            .set(&DataKey::UpgradeProposal, &proposal);
         env.events().publish((UPGRADE_PROPOSED, wasm_hash), admin);
     }
 
@@ -212,8 +219,10 @@ impl CampaignContract {
         }
 
         proposal.signatures.push_back(admin.clone());
-        env.storage().instance().set(&DataKey::UpgradeProposal, &proposal);
-        env.events().publish(UPGRADE_AUTHORIZED, admin);
+        env.storage()
+            .instance()
+            .set(&DataKey::UpgradeProposal, &proposal);
+        env.events().publish((UPGRADE_AUTHORIZED,), admin);
     }
 
     pub fn execute_upgrade(env: Env, admin: Address) {
@@ -234,20 +243,23 @@ impl CampaignContract {
             "timelock not met"
         );
 
-        env.deployer().update_current_contract_wasm(proposal.wasm_hash.clone());
+        env.deployer()
+            .update_current_contract_wasm(proposal.wasm_hash.clone());
         env.storage().instance().remove(&DataKey::UpgradeProposal);
-        env.events().publish(UPGRADE_EXECUTED, proposal.wasm_hash);
+        env.events()
+            .publish((UPGRADE_EXECUTED,), proposal.wasm_hash);
     }
 
     pub fn cancel_upgrade(env: Env, admin: Address) {
         Self::require_admin(&env, &admin);
         env.storage().instance().remove(&DataKey::UpgradeProposal);
-        env.events().publish(UPGRADE_CANCELLED, admin);
+        env.events().publish((UPGRADE_CANCELLED,), admin);
     }
 
     fn require_admin(env: &Env, admin: &Address) {
         admin.require_auth();
-        let admins: soroban_sdk::Vec<Address> = env.storage().instance().get(&DataKey::Admins).unwrap();
+        let admins: soroban_sdk::Vec<Address> =
+            env.storage().instance().get(&DataKey::Admins).unwrap();
         let mut is_admin = false;
         for a in admins.iter() {
             if a == *admin {
@@ -267,8 +279,8 @@ impl CampaignContract {
 mod tests {
     use super::*;
     use soroban_sdk::{
-        testutils::{Address as _, Ledger},
-        Bytes, Env,
+        testutils::{Address as _, Events, Ledger},
+        vec, Bytes, Env, IntoVal,
     };
 
     fn setup() -> (Env, Address, Address, CampaignContractClient<'static>) {
@@ -276,7 +288,7 @@ mod tests {
         env.mock_all_auths();
         let admin1 = Address::generate(&env);
         let admin2 = Address::generate(&env);
-        let contract_id = env.register_contract(None, CampaignContract);
+        let contract_id = env.register(CampaignContract, ());
         let client = CampaignContractClient::new(&env, &contract_id);
         let mut admins = soroban_sdk::Vec::new(&env);
         admins.push_back(admin1.clone());
@@ -295,7 +307,7 @@ mod tests {
 
     #[test]
     fn test_create_campaign() {
-        let (env, admin1, _admin2, client) = setup();
+        let (env, _admin1, _admin2, client) = setup();
         let merchant = Address::generate(&env);
         let expiry = env.ledger().timestamp() + 86400;
         let id = client.create_campaign(&merchant, &100, &expiry, &name(&env), &desc(&env));
@@ -310,7 +322,7 @@ mod tests {
 
     #[test]
     fn test_get_campaign_metadata() {
-        let (env, _admin, client) = setup();
+        let (env, _admin1, _admin2, client) = setup();
         let merchant = Address::generate(&env);
         let expiry = env.ledger().timestamp() + 86400;
         let id = client.create_campaign(&merchant, &100, &expiry, &name(&env), &desc(&env));
@@ -322,34 +334,34 @@ mod tests {
     #[test]
     #[should_panic(expected = "name exceeds 64 bytes")]
     fn test_name_too_long() {
-        let (env, _admin, client) = setup();
+        let (env, _admin1, _admin2, client) = setup();
         let merchant = Address::generate(&env);
         let expiry = env.ledger().timestamp() + 86400;
-        let long_name = Bytes::from_slice(env, &[b'x'; 65]);
+        let long_name = Bytes::from_slice(&env, &[b'x'; 65]);
         client.create_campaign(&merchant, &100, &expiry, &long_name, &desc(&env));
     }
 
     #[test]
     #[should_panic(expected = "description exceeds 256 bytes")]
     fn test_description_too_long() {
-        let (env, _admin, client) = setup();
+        let (env, _admin1, _admin2, client) = setup();
         let merchant = Address::generate(&env);
         let expiry = env.ledger().timestamp() + 86400;
-        let long_desc = Bytes::from_slice(env, &[b'd'; 257]);
+        let long_desc = Bytes::from_slice(&env, &[b'd'; 257]);
         client.create_campaign(&merchant, &100, &expiry, &name(&env), &long_desc);
     }
 
     #[test]
     #[should_panic(expected = "expiration must be in the future")]
     fn test_expired_campaign_rejected() {
-        let (env, admin1, _admin2, client) = setup();
+        let (env, _admin1, _admin2, client) = setup();
         let merchant = Address::generate(&env);
         client.create_campaign(&merchant, &100, &0, &name(&env), &desc(&env));
     }
 
     #[test]
     fn test_set_active_emits_deactivated_event() {
-        let (env, _admin, client) = setup();
+        let (env, _admin1, _admin2, client) = setup();
         let merchant = Address::generate(&env);
         let expiry = env.ledger().timestamp() + 86400;
         let id = client.create_campaign(&merchant, &100, &expiry, &name(&env), &desc(&env));
@@ -358,32 +370,55 @@ mod tests {
 
         let events = env.events().all();
         // events[0] = CAM_CRT, events[1] = CAM_DEACT
-        assert_eq!(events.len(), 2);
         assert_eq!(
-            events.get(1).unwrap(),
-            (
-                client.address.clone(),
-                (CAMPAIGN_DEACTIVATED, symbol_short!("id"), id).into_val(&env),
-                merchant.into_val(&env),
-            )
+            events,
+            vec![
+                &env,
+                (
+                    client.address.clone(),
+                    (CAMPAIGN_CREATED, symbol_short!("id"), id).into_val(&env),
+                    (merchant.clone(), name(&env), desc(&env)).into_val(&env),
+                ),
+                (
+                    client.address.clone(),
+                    (CAMPAIGN_DEACTIVATED, symbol_short!("id"), id).into_val(&env),
+                    merchant.into_val(&env),
+                ),
+            ]
         );
     }
 
     #[test]
     fn test_set_active_reactivate_no_event() {
-        let (env, _admin, client) = setup();
+        let (env, _admin1, _admin2, client) = setup();
         let merchant = Address::generate(&env);
         let expiry = env.ledger().timestamp() + 86400;
-        let id = client.create_campaign(&merchant, &100, &expiry);
+        let id = client.create_campaign(&merchant, &100, &expiry, &name(&env), &desc(&env));
         client.set_active(&id, &false);
         client.set_active(&id, &true);
         // reactivation emits no event — only 2 total (create + deactivate)
-        assert_eq!(env.events().all().len(), 2);
+        let all = env.events().all();
+        assert_eq!(
+            all,
+            vec![
+                &env,
+                (
+                    client.address.clone(),
+                    (CAMPAIGN_CREATED, symbol_short!("id"), id).into_val(&env),
+                    (merchant.clone(), name(&env), desc(&env)).into_val(&env),
+                ),
+                (
+                    client.address.clone(),
+                    (CAMPAIGN_DEACTIVATED, symbol_short!("id"), id).into_val(&env),
+                    merchant.into_val(&env),
+                ),
+            ]
+        );
     }
 
     #[test]
     fn test_is_active_after_expiry() {
-        let (env, admin1, _admin2, client) = setup();
+        let (env, _admin1, _admin2, client) = setup();
         let merchant = Address::generate(&env);
         let expiry = env.ledger().timestamp() + 10;
         let id = client.create_campaign(&merchant, &100, &expiry, &name(&env), &desc(&env));
@@ -398,16 +433,10 @@ mod tests {
         let (env, admin1, admin2, client) = setup();
         let wasm_hash = soroban_sdk::BytesN::from_array(&env, &[0u8; 32]);
 
-        // Propose
         client.propose_upgrade(&admin1, &wasm_hash);
-
-        // Authorize (need 2nd signature for threshold 2)
         client.authorize_upgrade(&admin2);
 
-        // Advance time for timelock (48h)
         env.ledger().with_mut(|l| l.timestamp += TIMELOCK + 1);
-
-        // Execute
         client.execute_upgrade(&admin1);
     }
 
@@ -419,20 +448,16 @@ mod tests {
 
         client.propose_upgrade(&admin1, &wasm_hash);
         client.authorize_upgrade(&admin2);
-
-        // Try to execute before 48h
         client.execute_upgrade(&admin1);
     }
 
     #[test]
     #[should_panic(expected = "insufficient authorizations")]
     fn test_upgrade_threshold_enforced() {
-        let (env, admin1, admin2, client) = setup();
+        let (env, admin1, _admin2, client) = setup();
         let wasm_hash = soroban_sdk::BytesN::from_array(&env, &[0u8; 32]);
 
         client.propose_upgrade(&admin1, &wasm_hash);
-        // missing 2nd signature
-
         env.ledger().with_mut(|l| l.timestamp += TIMELOCK + 1);
         client.execute_upgrade(&admin1);
     }
@@ -444,8 +469,6 @@ mod tests {
 
         client.propose_upgrade(&admin1, &wasm_hash);
         client.cancel_upgrade(&admin1);
-
-        // Verify it's gone (should be able to propose again)
         client.propose_upgrade(&admin1, &wasm_hash);
     }
 }

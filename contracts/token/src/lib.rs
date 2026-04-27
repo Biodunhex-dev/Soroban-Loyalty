@@ -1,4 +1,5 @@
 #![no_std]
+#![allow(deprecated)] // soroban_sdk::events::Events::publish is deprecated in 25.x; kept for API compatibility
 
 use soroban_sdk::{
     contract, contractimpl, contracttype, symbol_short, Address, Env, String, Symbol,
@@ -32,13 +33,7 @@ pub struct TokenContract;
 #[contractimpl]
 impl TokenContract {
     /// Initialize the token. Can only be called once.
-    pub fn initialize(
-        env: Env,
-        admin: Address,
-        name: String,
-        symbol: String,
-        decimals: u32,
-    ) {
+    pub fn initialize(env: Env, admin: Address, name: String, symbol: String, decimals: u32) {
         if env.storage().instance().has(&DataKey::Admin) {
             panic!("already initialized");
         }
@@ -80,9 +75,7 @@ impl TokenContract {
     }
 
     fn set_total_supply(env: &Env, supply: i128) {
-        env.storage()
-            .instance()
-            .set(&DataKey::TotalSupply, &supply);
+        env.storage().instance().set(&DataKey::TotalSupply, &supply);
     }
 
     // ── Allowance helpers ─────────────────────────────────────────────────────
@@ -157,11 +150,7 @@ impl TokenContract {
         let to_bal = Self::read_balance(&env, &to_key);
 
         Self::write_balance(&env, &from_key, from_bal - amount);
-        Self::write_balance(
-            &env,
-            &to_key,
-            to_bal.checked_add(amount).expect("overflow"),
-        );
+        Self::write_balance(&env, &to_key, to_bal.checked_add(amount).expect("overflow"));
 
         env.events()
             .publish((TRANSFER, symbol_short!("from"), from), (to, amount));
@@ -184,15 +173,17 @@ impl TokenContract {
         let current = Self::get_allowance(&env, &from, &spender);
         assert!(current >= amount, "allowance exceeded");
 
-        let from_bal = Self::balance_of(&env, &from);
+        let from_key = DataKey::Balance(from.clone());
+        let to_key = DataKey::Balance(to.clone());
+        let from_bal = Self::read_balance(&env, &from_key);
         assert!(from_bal >= amount, "insufficient balance");
 
         Self::set_allowance(&env, &from, &spender, current - amount);
-        Self::set_balance(&env, &from, from_bal - amount);
-        let to_bal = Self::balance_of(&env, &to)
+        Self::write_balance(&env, &from_key, from_bal - amount);
+        let to_bal = Self::read_balance(&env, &to_key)
             .checked_add(amount)
             .expect("overflow");
-        Self::set_balance(&env, &to, to_bal);
+        Self::write_balance(&env, &to_key, to_bal);
 
         env.events()
             .publish((TRANSFER, symbol_short!("from"), from), (to, amount));
@@ -238,13 +229,16 @@ impl TokenContract {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use soroban_sdk::{testutils::{Address as _, Events}, vec, IntoVal, Env};
+    use soroban_sdk::{
+        testutils::{Address as _, Events},
+        vec, Env, IntoVal,
+    };
 
     fn setup() -> (Env, Address, TokenContractClient<'static>) {
         let env = Env::default();
         env.mock_all_auths();
         let admin = Address::generate(&env);
-        let contract_id = env.register_contract(None, TokenContract);
+        let contract_id = env.register(TokenContract, ());
         let client = TokenContractClient::new(&env, &contract_id);
         client.initialize(
             &admin,
@@ -264,7 +258,6 @@ mod tests {
         assert_eq!(client.total_supply_view(), 1000);
 
         let events = env.events().all();
-        assert_eq!(events.len(), 1);
         assert_eq!(
             events,
             vec![
@@ -299,15 +292,22 @@ mod tests {
         assert_eq!(client.total_supply_view(), 200);
 
         let events = env.events().all();
-        // events[0] = mint, events[1] = burn
-        assert_eq!(events.len(), 2);
+        // events[0] = mint, events[1] = burn — compare the full list
         assert_eq!(
-            events.get(1).unwrap(),
-            (
-                client.address.clone(),
-                (BURN, symbol_short!("from"), user).into_val(&env),
-                (100_i128, 200_i128).into_val(&env),
-            )
+            events,
+            vec![
+                &env,
+                (
+                    client.address.clone(),
+                    (MINT, symbol_short!("to"), user.clone()).into_val(&env),
+                    (300_i128, 300_i128).into_val(&env),
+                ),
+                (
+                    client.address.clone(),
+                    (BURN, symbol_short!("from"), user).into_val(&env),
+                    (100_i128, 200_i128).into_val(&env),
+                ),
+            ]
         );
     }
 
