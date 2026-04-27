@@ -1,4 +1,6 @@
 [toolchain]
-channel = "1.81.0"
+channel = "1.85.0"
 targets = ["wasm32-unknown-unknown"]
 components = ["rustfmt", "clippy"]
+
+# Note: bumped from 1.81.0 to support soroban-sdk 25.x which requires edition2024 (Rust ≥ 1.85)
