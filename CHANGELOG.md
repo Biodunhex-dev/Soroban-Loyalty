@@ -1,3 +1,10 @@
+# [1.30.0](https://github.com/Dev-Odun-oss/Soroban-Loyalty/compare/v1.29.0...v1.30.0) (2026-04-29)
+
+
+### Features
+
+* **campaign:** add max_claims cap to campaigns ([8b4a0b8](https://github.com/Dev-Odun-oss/Soroban-Loyalty/commit/8b4a0b85b05e7a20b352d0f80f520458734ec4dc)), closes [#111](https://github.com/Dev-Odun-oss/Soroban-Loyalty/issues/111)
+
 # [1.29.0](https://github.com/Dev-Odun-oss/Soroban-Loyalty/compare/v1.28.0...v1.29.0) (2026-04-29)
 
 
