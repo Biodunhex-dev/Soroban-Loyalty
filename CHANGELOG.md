@@ -1,3 +1,12 @@
+# [1.31.0](https://github.com/Dev-Odun-oss/Soroban-Loyalty/compare/v1.30.0...v1.31.0) (2026-04-29)
+
+
+### Features
+
+* **frontend:** add reusable ConfirmDialog for irreversible actions ([fd4ddd8](https://github.com/Dev-Odun-oss/Soroban-Loyalty/commit/fd4ddd8d79af49983871ddbf9a4e17f2fa708550)), closes [#dc2626](https://github.com/Dev-Odun-oss/Soroban-Loyalty/issues/dc2626) [#48](https://github.com/Dev-Odun-oss/Soroban-Loyalty/issues/48)
+* **governance:** add on-chain governance contract for LYT holders ([075a06f](https://github.com/Dev-Odun-oss/Soroban-Loyalty/commit/075a06f3306cf419eba223664a2879fcd22b3d92)), closes [#129](https://github.com/Dev-Odun-oss/Soroban-Loyalty/issues/129)
+* **rewards:** add referral mechanism with bonus LYT ([701bbbe](https://github.com/Dev-Odun-oss/Soroban-Loyalty/commit/701bbbed966495a7adbd62c9cf718c8880f36ede)), closes [#30](https://github.com/Dev-Odun-oss/Soroban-Loyalty/issues/30)
+
 # [1.30.0](https://github.com/Dev-Odun-oss/Soroban-Loyalty/compare/v1.29.0...v1.30.0) (2026-04-29)
 
 
