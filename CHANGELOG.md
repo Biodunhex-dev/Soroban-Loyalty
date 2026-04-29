@@ -1,3 +1,10 @@
+# [1.32.0](https://github.com/Dev-Odun-oss/Soroban-Loyalty/compare/v1.31.0...v1.32.0) (2026-04-29)
+
+
+### Features
+
+* optimize cross-contract call pattern in rewards contract ([ffb3810](https://github.com/Dev-Odun-oss/Soroban-Loyalty/commit/ffb3810e3255af813718a9a731397a4160f38599)), closes [#116](https://github.com/Dev-Odun-oss/Soroban-Loyalty/issues/116)
+
 # [1.31.0](https://github.com/Dev-Odun-oss/Soroban-Loyalty/compare/v1.30.0...v1.31.0) (2026-04-29)
 
 
