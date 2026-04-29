@@ -500,3 +500,6 @@ mod tests {
         client.burn(&user, &100);
     }
 }
+
+#[cfg(test)]
+mod fuzz_tests;
