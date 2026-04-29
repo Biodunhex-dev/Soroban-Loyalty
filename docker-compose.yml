@@ -27,6 +27,25 @@ services:
           cpus: "0.25"
           memory: 256M
 
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    deploy:
+      resources:
+        limits:
+          cpus: "0.25"
+          memory: 128M
+        reservations:
+          cpus: "0.05"
+          memory: 32M
+
   soroban-local:
     image: stellar/quickstart:latest
     platform: linux/amd64
@@ -61,10 +80,13 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      redis:
+        condition: service_healthy
       soroban-local:
         condition: service_healthy
     environment:
       DATABASE_URL: postgres://loyalty:loyalty_secret@postgres:5432/soroban_loyalty
+      REDIS_URL: redis://redis:6379
       SOROBAN_RPC_URL: http://soroban-local:8000/soroban/rpc
       NETWORK_PASSPHRASE: "Standalone Network ; February 2017"
       REWARDS_CONTRACT_ID: ${REWARDS_CONTRACT_ID:-}
