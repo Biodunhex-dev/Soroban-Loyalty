@@ -25,10 +25,10 @@ async function seedData() {
   await pool.query(`INSERT INTO users (address) VALUES ($1)`, [SEEDED_USER_ADDRESS]);
 
   await pool.query(
-    `INSERT INTO campaigns (id, merchant, reward_amount, expiration, active, total_claimed, display_order)
+    `INSERT INTO campaigns (id, merchant, name, reward_amount, expiration, active, total_claimed, display_order)
      VALUES
-      (1, $1, 100, 1999999999, TRUE, 1, 0),
-      (2, $1, 250, 1999999999, TRUE, 0, 1)`,
+      (1, $1, 'Summer Sale', 100, 1999999999, TRUE,  1, 0),
+      (2, $1, 'Winter Promo', 250, 1000000000, FALSE, 0, 1)`,
     [SEEDED_USER_ADDRESS]
   );
 

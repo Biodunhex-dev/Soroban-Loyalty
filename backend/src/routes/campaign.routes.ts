@@ -6,7 +6,12 @@ import {
   reorderCampaigns,
   softDeleteCampaign,
   restoreCampaign,
+  CampaignFilters,
 } from "../services/campaign.service";
+import { redisClient } from "../lib/redis";
+import { logger } from "../logger";
+import { asyncHandler } from "../middleware/errorHandler";
+import { BadRequestError, NotFoundError } from "../utils/errors";
 
 export const campaignRouter = Router();
 
@@ -14,8 +19,8 @@ export const campaignRouter = Router();
  * @openapi
  * /campaigns:
  *   get:
- *     summary: List all campaigns
- *     description: Returns a paginated list of all campaigns stored in the database.
+ *     summary: List campaigns
+ *     description: Returns a paginated, filterable list of campaigns.
  *     tags: [Campaigns]
  *     parameters:
  *       - in: query
@@ -30,6 +35,27 @@ export const campaignRouter = Router();
  *           type: integer
  *           default: 0
  *         description: Number of campaigns to skip.
+ *       - in: query
+ *         name: search
+ *         schema:
+ *           type: string
+ *         description: Case-insensitive substring match on campaign name.
+ *       - in: query
+ *         name: status
+ *         schema:
+ *           type: string
+ *           enum: [active, inactive]
+ *         description: Filter by campaign active status.
+ *       - in: query
+ *         name: expires_before
+ *         schema:
+ *           type: integer
+ *         description: Return campaigns expiring at or before this unix timestamp.
+ *       - in: query
+ *         name: expires_after
+ *         schema:
+ *           type: integer
+ *         description: Return campaigns expiring at or after this unix timestamp.
  *     responses:
  *       200:
  *         description: A list of campaigns.
@@ -44,6 +70,8 @@ export const campaignRouter = Router();
  *                     $ref: '#/components/schemas/Campaign'
  *                 total:
  *                   type: integer
+ *       400:
+ *         description: Invalid query parameters.
  *       500:
  *         description: Server error.
  *         content:
@@ -54,7 +82,43 @@ export const campaignRouter = Router();
 campaignRouter.get("/", asyncHandler(async (req: Request, res: Response) => {
   const limit = Math.min(parseInt(String(req.query.limit ?? "20"), 10) || 20, 100);
   const offset = parseInt(String(req.query.offset ?? "0"), 10) || 0;
+  
+  const cacheKey = `campaigns:list:${limit}:${offset}`;
+  try {
+    const cached = await redisClient.get(cacheKey);
+    if (cached) {
+      logger.debug(`Cache hit for ${cacheKey}`);
+      return res.json(JSON.parse(cached));
+    }
+  } catch (err) {
+    logger.error("Redis cache read error", err as Error);
+  }
+
+  logger.debug(`Cache miss for ${cacheKey}`);
   const result = await getCampaigns(limit, offset);
+  
+  try {
+    await redisClient.setex(cacheKey, 30, JSON.stringify(result));
+  } catch (err) {
+    logger.error("Redis cache write error", err as Error);
+  }
+
+
+  const filters: CampaignFilters = {};
+  if (req.query.search) filters.search = String(req.query.search);
+  if (req.query.status === "active" || req.query.status === "inactive") {
+    filters.status = req.query.status;
+  }
+  if (req.query.expires_before) {
+    const v = parseInt(String(req.query.expires_before), 10);
+    if (!isNaN(v)) filters.expires_before = v;
+  }
+  if (req.query.expires_after) {
+    const v = parseInt(String(req.query.expires_after), 10);
+    if (!isNaN(v)) filters.expires_after = v;
+  }
+
+  const result = await getCampaigns(limit, offset, filters);
   res.json(result);
 }));
 
@@ -90,7 +154,7 @@ campaignRouter.get("/", asyncHandler(async (req: Request, res: Response) => {
  *         description: Server error.
  */
 campaignRouter.get("/:id", asyncHandler(async (req: Request, res: Response) => {
-  const id = parseInt(req.params.id, 10);
+  const id = parseInt(String(req.params.id), 10);
   if (isNaN(id)) {
     throw new BadRequestError("Invalid id", { id: req.params.id });
   }
@@ -145,14 +209,16 @@ campaignRouter.patch("/reorder", asyncHandler(async (req: Request, res: Response
   if (!parsed.success) {
     throw new BadRequestError("Invalid request body", { errors: parsed.error.errors });
   }
-});
+  await reorderCampaigns(parsed.data.order);
+  res.json({ ok: true });
+}));
 
 /**
  * DELETE /campaigns/:id
  * Soft-deletes a campaign by setting deleted_at.
  */
 campaignRouter.delete("/:id", async (req: Request, res: Response) => {
-  const id = parseInt(req.params.id, 10);
+  const id = parseInt(String(req.params.id), 10);
   if (isNaN(id)) return res.status(400).json({ error: "Invalid id" });
   try {
     const deleted = await softDeleteCampaign(id);
@@ -168,7 +234,7 @@ campaignRouter.delete("/:id", async (req: Request, res: Response) => {
  * Restores a soft-deleted campaign.
  */
 campaignRouter.post("/:id/restore", async (req: Request, res: Response) => {
-  const id = parseInt(req.params.id, 10);
+  const id = parseInt(String(req.params.id), 10);
   if (isNaN(id)) return res.status(400).json({ error: "Invalid id" });
   try {
     const restored = await restoreCampaign(id);

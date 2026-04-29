@@ -44,6 +44,62 @@ describe("GET endpoints integration", () => {
     expect(response.body.campaigns[0]).toHaveProperty("merchant", SEEDED_USER_ADDRESS);
   });
 
+  it("GET /campaigns?search= filters by name substring (case-insensitive)", async () => {
+    const response = await request(app).get("/campaigns?search=summer");
+
+    expect(response.status).toBe(200);
+    expect(response.body.total).toBe(1);
+    expect(response.body.campaigns[0]).toHaveProperty("name", "Summer Sale");
+  });
+
+  it("GET /campaigns?status=active returns only active campaigns", async () => {
+    const response = await request(app).get("/campaigns?status=active");
+
+    expect(response.status).toBe(200);
+    expect(response.body.total).toBe(1);
+    expect(response.body.campaigns[0]).toHaveProperty("active", true);
+  });
+
+  it("GET /campaigns?status=inactive returns only inactive campaigns", async () => {
+    const response = await request(app).get("/campaigns?status=inactive");
+
+    expect(response.status).toBe(200);
+    expect(response.body.total).toBe(1);
+    expect(response.body.campaigns[0]).toHaveProperty("active", false);
+  });
+
+  it("GET /campaigns?expires_before= filters by expiration upper bound", async () => {
+    const response = await request(app).get("/campaigns?expires_before=1500000000");
+
+    expect(response.status).toBe(200);
+    expect(response.body.total).toBe(1);
+    expect(response.body.campaigns[0]).toHaveProperty("name", "Winter Promo");
+  });
+
+  it("GET /campaigns?expires_after= filters by expiration lower bound", async () => {
+    const response = await request(app).get("/campaigns?expires_after=1500000000");
+
+    expect(response.status).toBe(200);
+    expect(response.body.total).toBe(1);
+    expect(response.body.campaigns[0]).toHaveProperty("name", "Summer Sale");
+  });
+
+  it("GET /campaigns composes search + status filters", async () => {
+    const response = await request(app).get("/campaigns?search=winter&status=inactive");
+
+    expect(response.status).toBe(200);
+    expect(response.body.total).toBe(1);
+    expect(response.body.campaigns[0]).toHaveProperty("name", "Winter Promo");
+  });
+
+  it("GET /campaigns returns empty when no campaigns match filters", async () => {
+    const response = await request(app).get("/campaigns?search=nonexistent");
+
+    expect(response.status).toBe(200);
+    expect(response.body.total).toBe(0);
+    expect(response.body.campaigns).toHaveLength(0);
+  });
+
   it("GET /campaigns/:id returns one campaign for valid id", async () => {
     const response = await request(app).get("/campaigns/1");
 

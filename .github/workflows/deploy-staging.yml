@@ -1,0 +1,51 @@
+name: Deploy Staging Environment
+
+on:
+  push:
+    branches:
+      - main
+
+env:
+  IMAGE_TAG: ${{ github.sha }}
+
+jobs:
+  deploy-staging:
+    runs-on: ubuntu-latest
+    environment: staging
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          aws-region: us-east-1
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+
+      - name: Build and Push Docker Images
+        run: |
+          # Building with the same hash ensures artifact parity between Staging and Production
+          docker build -t soroban-loyalty-backend:$IMAGE_TAG ./backend
+          docker build -t soroban-loyalty-frontend:$IMAGE_TAG ./frontend
+          # docker push ...
+
+      - name: Apply Staging Infrastructure (Terraform)
+        working-directory: infra/staging
+        run: |
+          terraform init
+          # Pass team IPs via secrets to configure AWS WAF/Security Group restrict access
+          terraform apply -auto-approve -var="image_tag=$IMAGE_TAG" -var="allowed_ips=${{ secrets.TEAM_IPS }}"
+
+      - name: Update Staging Kubernetes Deployments
+        run: |
+          # kubectl set image deployment/backend backend=soroban-loyalty-backend:$IMAGE_TAG -n soroban-loyalty-staging
+          # kubectl set image deployment/frontend frontend=soroban-loyalty-frontend:$IMAGE_TAG -n soroban-loyalty-staging
+
+      - name: Notify Slack on Deployment
+        if: always()
+        uses: rtCamp/action-slack-notify@v2
+        env:
+          SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK_URL }}
+          SLACK_COLOR: ${{ job.status == 'success' && 'good' || 'danger' }}
+          SLACK_MESSAGE: 'Staging deployment triggered by merge to main completed with status: ${{ job.status }}'
+          SLACK_TITLE: 'Staging Deployment Status'

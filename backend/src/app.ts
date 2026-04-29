@@ -3,6 +3,8 @@ import cors from "cors";
 import { campaignRouter } from "./routes/campaign.routes";
 import { rewardRouter } from "./routes/reward.routes";
 import { analyticsRouter } from "./routes/analytics.routes";
+import { authRouter } from "./routes/auth.routes";
+import { requireAuth } from "./auth";
 import { rpcServer } from "./soroban";
 import { pool } from "./db";
 import {
@@ -43,6 +45,8 @@ export function createApp() {
   });
 
   app.get("/health", async (_req, res) => {
+    const HEALTH_CHECK_TIMEOUT_MS = 400; // per-check cap; keeps total response < 500 ms
+
     const checks: {
       stellar: { reachable: boolean; latency: number };
       database: { connected: boolean; responseTime: number };
@@ -53,23 +57,39 @@ export function createApp() {
       indexer: { running: process.env.ENABLE_INDEXER !== "false" },
     };
 
-    try {
-      const stellarStart = Date.now();
-      await rpcServer.getHealth();
-      checks.stellar.reachable = true;
-      checks.stellar.latency = Date.now() - stellarStart;
-    } catch {
-      checks.stellar.reachable = false;
-    }
+    /** Race a promise against a timeout so a slow dependency cannot block the response. */
+    const withTimeout = <T>(promise: Promise<T>, ms: number): Promise<T> =>
+      Promise.race([
+        promise,
+        new Promise<never>((_, reject) =>
+          setTimeout(() => reject(new Error("Health check timed out")), ms),
+        ),
+      ]);
 
-    try {
-      const dbStart = Date.now();
-      await pool.query("SELECT 1");
-      checks.database.connected = true;
-      checks.database.responseTime = Date.now() - dbStart;
-    } catch {
-      checks.database.connected = false;
-    }
+    // Run dependency checks in parallel for speed
+    const stellarCheck = (async () => {
+      try {
+        const start = Date.now();
+        await withTimeout(rpcServer.getHealth(), HEALTH_CHECK_TIMEOUT_MS);
+        checks.stellar.reachable = true;
+        checks.stellar.latency = Date.now() - start;
+      } catch {
+        checks.stellar.reachable = false;
+      }
+    })();
+
+    const dbCheck = (async () => {
+      try {
+        const start = Date.now();
+        await withTimeout(pool.query("SELECT 1"), HEALTH_CHECK_TIMEOUT_MS);
+        checks.database.connected = true;
+        checks.database.responseTime = Date.now() - start;
+      } catch {
+        checks.database.connected = false;
+      }
+    })();
+
+    await Promise.all([stellarCheck, dbCheck]);
 
     const allHealthy = checks.stellar.reachable && checks.database.connected;
     const status = allHealthy
@@ -78,7 +98,9 @@ export function createApp() {
         ? "degraded"
         : "unhealthy";
 
-    res.json({
+    const httpStatus = allHealthy ? 200 : 503;
+
+    res.status(httpStatus).json({
       status,
       checks,
       timestamp: new Date().toISOString(),
@@ -89,6 +111,9 @@ export function createApp() {
   app.use("/campaigns", campaignRouter);
   app.use("/", rewardRouter);
   app.use("/analytics", analyticsRouter);
+  app.use("/auth", authRouter);
+  // Merchant mutation routes require JWT
+  app.use("/merchant/campaigns", requireAuth, campaignRouter);
 
   app.use(errorAlertMiddleware);
 

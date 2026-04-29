@@ -2,7 +2,7 @@
 # deploy-contracts.sh — Build and deploy all three Soroban contracts.
 # Usage: ./scripts/deploy-contracts.sh [network] [admin-secret-key]
 #
-# network: local | testnet (default: local)
+# network: local | testnet | mainnet (default: local)
 # admin-secret-key: Stellar secret key (S...) for the deployer/admin account
 
 set -euo pipefail
@@ -11,7 +11,7 @@ NETWORK="${1:-local}"
 ADMIN_SECRET="${2:-}"
 
 if [[ -z "$ADMIN_SECRET" ]]; then
-  echo "Usage: $0 [local|testnet] <ADMIN_SECRET_KEY>"
+  echo "Usage: $0 [local|testnet|mainnet] <ADMIN_SECRET_KEY>"
   exit 1
 fi
 
@@ -24,11 +24,20 @@ case "$NETWORK" in
     RPC_URL="https://soroban-testnet.stellar.org"
     PASSPHRASE="Test SDF Network ; September 2015"
     ;;
+  mainnet)
+    RPC_URL="https://mainnet.sorobanrpc.com"
+    PASSPHRASE="Public Global Stellar Network ; September 2015"
+    ;;
   *)
     echo "Unknown network: $NETWORK"
     exit 1
     ;;
 esac
+
+if [[ "$NETWORK" == "mainnet" ]]; then
+  echo "==> Verifying third-party audit readiness gate for mainnet..."
+  bash scripts/check-contract-audit-readiness.sh
+fi
 
 ADMIN_PUBLIC=$(stellar keys address "$ADMIN_SECRET" 2>/dev/null || \
   stellar keys generate --secret-key "$ADMIN_SECRET" --network "$NETWORK" 2>/dev/null || \
@@ -85,7 +94,8 @@ stellar contract invoke \
   --rpc-url "$RPC_URL" \
   --network-passphrase "$PASSPHRASE" \
   -- initialize \
-  --admin "$REWARDS_ID"
+  --admins "[\"$REWARDS_ID\"]" \
+  --threshold 1
 
 echo "==> Initializing Rewards contract..."
 stellar contract invoke \

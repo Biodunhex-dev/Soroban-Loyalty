@@ -20,10 +20,10 @@ jobs:
   ci:
     name: Build, Lint & Test
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 20
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@master
@@ -53,6 +53,11 @@ jobs:
       - name: Run tests
         run: cargo test --workspace
 
+      - name: Run fuzz / property-based tests (10 000 cases each)
+        env:
+          PROPTEST_CASES: "10000"
+        run: cargo test --package soroban-loyalty-token fuzz_ -- --test-threads=1
+
       - name: Build contracts (wasm32)
         run: cargo build --target wasm32-unknown-unknown --release --workspace
 
@@ -62,7 +67,7 @@ jobs:
     timeout-minutes: 10
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Install cargo-audit
         run: cargo install cargo-audit --locked

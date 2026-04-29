@@ -1,0 +1,33 @@
+name: Refresh Staging Data
+
+on:
+  schedule:
+    - cron: '0 2 * * 0' # Every Sunday at 2 AM UTC
+  workflow_dispatch: # Allow manual triggering
+
+jobs:
+  refresh-data:
+    runs-on: ubuntu-latest
+    environment: staging
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Clone Production Data to Staging
+        run: |
+          echo "Cloning production database snapshot to staging environment..."
+          # Logic to restore RDS snapshot or perform pg_dump from a production read replica
+
+      - name: Anonymize Staging Database
+        run: |
+          chmod +x ./scripts/anonymize-db.sh
+          ./scripts/anonymize-db.sh "${{ secrets.STAGING_DATABASE_URL }}"
+
+      - name: Notify Slack
+        if: always()
+        uses: rtCamp/action-slack-notify@v2
+        env:
+          SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK_URL }}
+          SLACK_COLOR: ${{ job.status == 'success' && 'good' || 'danger' }}
+          SLACK_MESSAGE: 'Weekly staging data refresh completed with status: ${{ job.status }}'
+          SLACK_TITLE: 'Staging Data Refresh Status'

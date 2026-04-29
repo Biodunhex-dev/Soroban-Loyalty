@@ -36,9 +36,9 @@ jobs:
         working-directory: backend
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v6
         with:
           node-version: 20
           cache: npm
@@ -53,8 +53,8 @@ jobs:
       - name: Type-check
         run: npm run typecheck
 
-      - name: Apply DB schema
-        run: psql $DATABASE_URL -f ../database/schema.sql
+      - name: Run migrations
+        run: npm run migrate:up
 
       - name: Create dedicated integration test database
         run: psql $DATABASE_URL -c "CREATE DATABASE loyalty_test;"
@@ -76,6 +76,32 @@ jobs:
           path: backend/coverage/
           retention-days: 7
 
+  trivy-scan:
+    name: Trivy Image Scan
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Build backend image
+        run: docker build -t soroban-loyalty-backend:${{ github.sha }} ./backend
+
+      - name: Run Trivy vulnerability scan
+        uses: aquasecurity/trivy-action@0.30.0
+        with:
+          image-ref: soroban-loyalty-backend:${{ github.sha }}
+          format: sarif
+          output: trivy-backend.sarif
+          severity: HIGH,CRITICAL
+          exit-code: "1"
+
+      - name: Upload Trivy SARIF to GitHub Security
+        if: always()
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: trivy-backend.sarif
+          category: trivy-backend
+
   audit-backend:
     name: Backend Security Audit
     runs-on: ubuntu-latest
@@ -85,9 +111,9 @@ jobs:
         working-directory: backend
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v6
         with:
           node-version: 20
           cache: npm
@@ -144,9 +170,9 @@ jobs:
         working-directory: frontend
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v6
         with:
           node-version: 20
           cache: npm

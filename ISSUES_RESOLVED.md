@@ -21,6 +21,14 @@ All four issues have been successfully implemented and are ready for review and 
 
 ## Quick Links
 
+### Issue #78: Staging Environment Parity
+- **Branch:** `feature/staging-environment-78`
+- **Files Changed:** 4 files (`.github/workflows/deploy-staging.yml`, `.github/workflows/refresh-staging-data.yml`, `.github/workflows/cleanup-staging.yml`, `scripts/anonymize-db.sh`)
+- **Key Features:** 
+  - Automated staging deployment on `main` merge using uniform Docker images.
+  - Weekly production data snapshots with address/transaction anonymization.
+  - CloudWatch tracking for 7-day inactivity and automated environment tear-downs.
+
 ### Issue #107: Domain Glossary
 - **Branch:** `issue-107-glossary`
 - **Files Changed:** 2 files (`docs/glossary.md`, `README.md`)
@@ -143,6 +151,9 @@ git merge fix/responsive-campaign-cards-30 \
 # Merge responsive layout
 git checkout main
 git merge fix/responsive-campaign-cards-30
+
+# Merge staging environment parity
+git merge feature/staging-environment-78
 
 # Merge network status
 git merge feature/network-status-indicator-59

@@ -1,3 +1,111 @@
+# [1.28.0](https://github.com/Dev-Odun-oss/Soroban-Loyalty/compare/v1.27.1...v1.28.0) (2026-04-29)
+
+
+### Features
+
+* campaign deactivation UI for merchants ([#42](https://github.com/Dev-Odun-oss/Soroban-Loyalty/issues/42)) ([df5d064](https://github.com/Dev-Odun-oss/Soroban-Loyalty/commit/df5d0649cb1728f46d6bac619dd5c112a9624ff4))
+
+## [1.27.1](https://github.com/Dev-Odun-oss/Soroban-Loyalty/compare/v1.27.0...v1.27.1) (2026-04-29)
+
+
+### Bug Fixes
+
+* WCAG 2.1 AA contrast audit and fixes ([f9b08bd](https://github.com/Dev-Odun-oss/Soroban-Loyalty/commit/f9b08bd8de03379632b8d5549c650fc69a05ed9f))
+
+# [1.27.0](https://github.com/Dev-Odun-oss/Soroban-Loyalty/compare/v1.26.0...v1.27.0) (2026-04-29)
+
+
+### Features
+
+* code of conduct ([cde1693](https://github.com/Dev-Odun-oss/Soroban-Loyalty/commit/cde169306cfa77312bd66eb5d7747578c64d0ea8))
+
+# [1.26.0](https://github.com/Dev-Odun-oss/Soroban-Loyalty/compare/v1.25.0...v1.26.0) (2026-04-29)
+
+
+### Features
+
+* audit log table for sensitive operations ([#22](https://github.com/Dev-Odun-oss/Soroban-Loyalty/issues/22)) ([a46eb16](https://github.com/Dev-Odun-oss/Soroban-Loyalty/commit/a46eb160f40f35ae418a290535d832eda1162fde))
+
+# [1.25.0](https://github.com/Dev-Odun-oss/Soroban-Loyalty/compare/v1.24.0...v1.25.0) (2026-04-29)
+
+
+### Features
+
+* **contracts:** add campaign pause and resume functionality ([62027e7](https://github.com/Dev-Odun-oss/Soroban-Loyalty/commit/62027e70cebf4560327e160f5398c9761f8cd9cb))
+
+# [1.24.0](https://github.com/Dev-Odun-oss/Soroban-Loyalty/compare/v1.23.0...v1.24.0) (2026-04-29)
+
+
+### Features
+
+* add emergency pause mechanism across all three contracts ([d66d81b](https://github.com/Dev-Odun-oss/Soroban-Loyalty/commit/d66d81ba0e3338228ed19f23c0c2c31964d2528d))
+* automated PostgreSQL backup to S3 with 30-day retention ([ea0bc10](https://github.com/Dev-Odun-oss/Soroban-Loyalty/commit/ea0bc100c998db10853c2a5cc57c4eadb554379e))
+
+# [1.23.0](https://github.com/Dev-Odun-oss/Soroban-Loyalty/compare/v1.22.1...v1.23.0) (2026-04-29)
+
+
+### Features
+
+* centralized log aggregation with ELK stack ([#74](https://github.com/Dev-Odun-oss/Soroban-Loyalty/issues/74)) ([c0b9e6d](https://github.com/Dev-Odun-oss/Soroban-Loyalty/commit/c0b9e6d3b857a91cddd82d1351e8d7bf589af40a))
+* JWT authentication for merchant endpoints ([#9](https://github.com/Dev-Odun-oss/Soroban-Loyalty/issues/9)) ([327ffe7](https://github.com/Dev-Odun-oss/Soroban-Loyalty/commit/327ffe771235220afe87007436bb9856b28a9646))
+
+## [1.22.1](https://github.com/Dev-Odun-oss/Soroban-Loyalty/compare/v1.22.0...v1.22.1) (2026-04-29)
+
+
+### Performance Improvements
+
+* optimize campaign storage layout and implement temporary storage [#110](https://github.com/Dev-Odun-oss/Soroban-Loyalty/issues/110) ([1d2b4c7](https://github.com/Dev-Odun-oss/Soroban-Loyalty/commit/1d2b4c740c69e097f0afdfa996b78890af69941c))
+
+# [1.22.0](https://github.com/Dev-Odun-oss/Soroban-Loyalty/compare/v1.21.1...v1.22.0) (2026-04-28)
+
+
+### Features
+
+* add onboarding flow ([#46](https://github.com/Dev-Odun-oss/Soroban-Loyalty/issues/46)) and tooltip system ([#57](https://github.com/Dev-Odun-oss/Soroban-Loyalty/issues/57)) ([28bb3aa](https://github.com/Dev-Odun-oss/Soroban-Loyalty/commit/28bb3aaf5c2fa4f06da7c7502006bc5d93137fdb))
+
+## [1.21.1](https://github.com/Dev-Odun-oss/Soroban-Loyalty/compare/v1.21.0...v1.21.1) (2026-04-28)
+
+
+### Bug Fixes
+
+* add database indexes for frequently queried columns ([5a96ade](https://github.com/Dev-Odun-oss/Soroban-Loyalty/commit/5a96ade3b8adfcc32e93793acf26aa78471f5327))
+
+# [1.21.0](https://github.com/Dev-Odun-oss/Soroban-Loyalty/compare/v1.20.0...v1.21.0) (2026-04-28)
+
+
+### Features
+
+* add search and filtering to GET /campaigns ([788e523](https://github.com/Dev-Odun-oss/Soroban-Loyalty/commit/788e5239ae17036dcea192bb0c15a4243c8a2ddd))
+
+# [1.20.0](https://github.com/Dev-Odun-oss/Soroban-Loyalty/compare/v1.19.0...v1.20.0) (2026-04-28)
+
+
+### Features
+
+* **rewards:** implement storage migration pattern with idempotency guard ([69b429e](https://github.com/Dev-Odun-oss/Soroban-Loyalty/commit/69b429e3bfc17f770625e806f1ec8556af3779dd)), closes [#119](https://github.com/Dev-Odun-oss/Soroban-Loyalty/issues/119)
+* **token:** implement multi-sig admin for mint and set_admin ([c09f586](https://github.com/Dev-Odun-oss/Soroban-Loyalty/commit/c09f586f7178107bfa046b2da183372766005566)), closes [#114](https://github.com/Dev-Odun-oss/Soroban-Loyalty/issues/114)
+
+# [1.19.0](https://github.com/Dev-Odun-oss/Soroban-Loyalty/compare/v1.18.0...v1.19.0) (2026-04-28)
+
+
+### Features
+
+* **rewards:** implement linear vesting schedule per campaign ([047d419](https://github.com/Dev-Odun-oss/Soroban-Loyalty/commit/047d419d7e3942b6025aab8146c6ec1575790ee4)), closes [#128](https://github.com/Dev-Odun-oss/Soroban-Loyalty/issues/128)
+
+# [1.18.0](https://github.com/Dev-Odun-oss/Soroban-Loyalty/compare/v1.17.0...v1.18.0) (2026-04-28)
+
+
+### Features
+
+* harden Dockerfiles and add Trivy image scanning to CI ([2a51d90](https://github.com/Dev-Odun-oss/Soroban-Loyalty/commit/2a51d903aeb26e49732b708bdda8cfcf4521f9a3))
+
+# [1.17.0](https://github.com/Dev-Odun-oss/Soroban-Loyalty/compare/v1.16.0...v1.17.0) (2026-04-28)
+
+
+### Features
+
+* all issue ([a5a1c49](https://github.com/Dev-Odun-oss/Soroban-Loyalty/commit/a5a1c494bad55dd717f570a8d5b5f47add9814d2))
+
 # [1.16.0](https://github.com/Dev-Odun-oss/Soroban-Loyalty/compare/v1.15.1...v1.16.0) (2026-04-27)
 
 

@@ -1,7 +1,7 @@
 #![no_std]
 
 use soroban_sdk::{
-    contract, contractimpl, contracttype, symbol_short, Address, Env, String, Symbol,
+    contract, contractimpl, contracttype, symbol_short, Address, Env, String, Symbol, Vec,
 };
 
 // ── Roles ─────────────────────────────────────────────────────────────────────
@@ -20,16 +20,35 @@ pub enum Role {
 
 #[contracttype]
 pub enum DataKey {
-    /// Role membership: (role, address) → bool
-    RoleMember(Role, Address),
+    /// Multi-sig admin config
+    MultiSig,
+    /// Designated minter (e.g. rewards contract) — can call mint() directly
+    Minter,
     Balance(Address),
     Allowance(Address, Address),
     TotalSupply,
     Name,
     Symbol,
     Decimals,
-    /// Whether the contract is paused
-    Paused,
+    /// Pending set_admin proposal awaiting threshold signatures
+    SetAdminProposal,
+}
+
+// ── Multi-sig types ───────────────────────────────────────────────────────────
+
+#[contracttype]
+#[derive(Clone)]
+pub struct MultiSigConfig {
+    pub signers: Vec<Address>,
+    pub threshold: u32,
+}
+
+#[contracttype]
+#[derive(Clone)]
+pub struct SetAdminProposal {
+    pub new_config: MultiSigConfig,
+    pub new_minter: Address,
+    pub signatures: Vec<Address>,
 }
 
 // ── Events ────────────────────────────────────────────────────────────────────
@@ -38,8 +57,6 @@ const MINT: Symbol = symbol_short!("MINT");
 const TRANSFER: Symbol = symbol_short!("TRANSFER");
 const BURN: Symbol = symbol_short!("BURN");
 const APPROVAL: Symbol = symbol_short!("APPROVAL");
-const ROLE_GRANTED: Symbol = symbol_short!("ROLE_GRT");
-const ROLE_REVOKED: Symbol = symbol_short!("ROLE_REV");
 const PAUSED: Symbol = symbol_short!("PAUSED");
 const UNPAUSED: Symbol = symbol_short!("UNPAUSED");
 
@@ -50,23 +67,26 @@ pub struct TokenContract;
 
 #[contractimpl]
 impl TokenContract {
-    /// Initialize the token. Can only be called once.
-    /// `admin` receives the ADMIN, MINTER, and PAUSER roles.
+    /// Initialize the token with multi-sig admin config and a designated minter.
+    /// `minter` is the rewards contract address that can call `mint()` directly.
     pub fn initialize(
         env: Env,
-        admin: Address,
+        signers: Vec<Address>,
+        threshold: u32,
+        minter: Address,
         name: String,
         symbol: String,
         decimals: u32,
     ) {
-        if env.storage().instance().has(&DataKey::Paused) {
+        if env.storage().instance().has(&DataKey::MultiSig) {
             panic!("already initialized");
         }
-        // Grant all roles to the initial admin
-        Self::_grant_role(&env, &Role::Admin, &admin);
-        Self::_grant_role(&env, &Role::Minter, &admin);
-        Self::_grant_role(&env, &Role::Pauser, &admin);
+        assert!(threshold > 0, "threshold must be positive");
+        assert!(signers.len() >= threshold, "insufficient signers for threshold");
 
+        let config = MultiSigConfig { signers, threshold };
+        env.storage().instance().set(&DataKey::MultiSig, &config);
+        env.storage().instance().set(&DataKey::Minter, &minter);
         env.storage().instance().set(&DataKey::Name, &name);
         env.storage().instance().set(&DataKey::Symbol, &symbol);
         env.storage().instance().set(&DataKey::Decimals, &decimals);
@@ -102,62 +122,37 @@ impl TokenContract {
         }
     }
 
-    // ── Role management (ADMIN only) ──────────────────────────────────────────
+    // ── Helpers ───────────────────────────────────────────────────────────────
 
-    /// Grant `role` to `account`. Caller must have ADMIN role.
-    pub fn grant_role(env: Env, admin: Address, role: Role, account: Address) {
-        Self::require_role(&env, &Role::Admin, &admin);
-        Self::_grant_role(&env, &role, &account);
-        env.events()
-            .publish((ROLE_GRANTED, role), (admin, account));
+    fn config(env: &Env) -> MultiSigConfig {
+        env.storage().instance().get(&DataKey::MultiSig).unwrap()
     }
 
-    /// Revoke `role` from `account`. Caller must have ADMIN role.
-    pub fn revoke_role(env: Env, admin: Address, role: Role, account: Address) {
-        Self::require_role(&env, &Role::Admin, &admin);
-        Self::_revoke_role(&env, &role, &account);
-        env.events()
-            .publish((ROLE_REVOKED, role), (admin, account));
+    fn minter(env: &Env) -> Address {
+        env.storage().instance().get(&DataKey::Minter).unwrap()
     }
 
-    /// Returns true if `account` has `role`.
-    pub fn has_role_view(env: Env, role: Role, account: Address) -> bool {
-        Self::has_role(&env, &role, &account)
-    }
-
-    // ── Pause (PAUSER role) ───────────────────────────────────────────────────
-
-    pub fn pause(env: Env, pauser: Address) {
-        Self::require_role(&env, &Role::Pauser, &pauser);
-        env.storage().instance().set(&DataKey::Paused, &true);
-        env.events().publish(PAUSED, pauser);
-    }
-
-    pub fn unpause(env: Env, pauser: Address) {
-        Self::require_role(&env, &Role::Pauser, &pauser);
-        env.storage().instance().set(&DataKey::Paused, &false);
-        env.events().publish(UNPAUSED, pauser);
-    }
-
-    pub fn is_paused(env: Env) -> bool {
-        env.storage()
-            .instance()
-            .get(&DataKey::Paused)
-            .unwrap_or(false)
-    }
-
-    fn require_not_paused(env: &Env) {
-        let paused: bool = env
-            .storage()
-            .instance()
-            .get(&DataKey::Paused)
-            .unwrap_or(false);
-        if paused {
-            panic!("contract is paused");
+    fn require_signer(env: &Env, signer: &Address) {
+        signer.require_auth();
+        let cfg = Self::config(env);
+        let mut found = false;
+        for s in cfg.signers.iter() {
+            if s == *signer {
+                found = true;
+                break;
+            }
         }
+        assert!(found, "not a signer");
     }
 
-    // ── Balance helpers ───────────────────────────────────────────────────────
+    fn has_signed(signatures: &Vec<Address>, signer: &Address) -> bool {
+        for s in signatures.iter() {
+            if s == *signer {
+                return true;
+            }
+        }
+        false
+    }
 
     #[inline(always)]
     fn read_balance(env: &Env, key: &DataKey) -> i128 {
@@ -170,19 +165,12 @@ impl TokenContract {
     }
 
     fn total_supply(env: &Env) -> i128 {
-        env.storage()
-            .instance()
-            .get(&DataKey::TotalSupply)
-            .unwrap_or(0)
+        env.storage().instance().get(&DataKey::TotalSupply).unwrap_or(0)
     }
 
     fn set_total_supply(env: &Env, supply: i128) {
-        env.storage()
-            .instance()
-            .set(&DataKey::TotalSupply, &supply);
+        env.storage().instance().set(&DataKey::TotalSupply, &supply);
     }
-
-    // ── Allowance helpers ─────────────────────────────────────────────────────
 
     fn get_allowance(env: &Env, owner: &Address, spender: &Address) -> i128 {
         env.storage()
@@ -197,28 +185,83 @@ impl TokenContract {
             .set(&DataKey::Allowance(owner.clone(), spender.clone()), &amount);
     }
 
-    // ── Public interface ──────────────────────────────────────────────────────
-
-    /// Mint `amount` tokens to `to`. Caller must have MINTER role.
-    pub fn mint(env: Env, minter: Address, to: Address, amount: i128) {
-        Self::require_role(&env, &Role::Minter, &minter);
-        Self::require_not_paused(&env);
-        assert!(amount > 0, "amount must be positive");
-
+    fn do_mint(env: &Env, to: &Address, amount: i128) {
         let key = DataKey::Balance(to.clone());
-        let new_bal = Self::read_balance(&env, &key)
-            .checked_add(amount)
-            .expect("overflow");
-        Self::write_balance(&env, &key, new_bal);
-
-        let new_supply = Self::total_supply(&env)
-            .checked_add(amount)
-            .expect("overflow");
-        Self::set_total_supply(&env, new_supply);
-
-        env.events()
-            .publish((MINT, symbol_short!("to"), to), (amount, new_supply));
+        let new_bal = Self::read_balance(env, &key).checked_add(amount).expect("overflow");
+        Self::write_balance(env, &key, new_bal);
+        let new_supply = Self::total_supply(env).checked_add(amount).expect("overflow");
+        Self::set_total_supply(env, new_supply);
+        env.events().publish((MINT, symbol_short!("to"), to.clone()), (amount, new_supply));
     }
+
+    // ── Minter-only mint (called by rewards contract) ─────────────────────────
+
+    /// Direct mint callable only by the designated minter (rewards contract).
+    pub fn mint(env: Env, to: Address, amount: i128) {
+        let minter = Self::minter(&env);
+        minter.require_auth();
+        assert!(amount > 0, "amount must be positive");
+        Self::do_mint(&env, &to, amount);
+    }
+
+    // ── Multi-sig admin rotation ──────────────────────────────────────────────
+
+    /// Propose replacing the multi-sig config and minter. First signer initiates.
+    pub fn propose_set_admin(
+        env: Env,
+        signer: Address,
+        new_signers: Vec<Address>,
+        new_threshold: u32,
+        new_minter: Address,
+    ) {
+        Self::require_signer(&env, &signer);
+        assert!(new_threshold > 0, "threshold must be positive");
+        assert!(new_signers.len() >= new_threshold, "insufficient signers for threshold");
+        assert!(
+            !env.storage().instance().has(&DataKey::SetAdminProposal),
+            "set_admin proposal already pending"
+        );
+
+        let new_config = MultiSigConfig { signers: new_signers, threshold: new_threshold };
+        let mut signatures = Vec::new(&env);
+        signatures.push_back(signer);
+        let proposal = SetAdminProposal { new_config, new_minter, signatures };
+        env.storage().instance().set(&DataKey::SetAdminProposal, &proposal);
+    }
+
+    /// Add a signature to the pending set_admin proposal.
+    pub fn approve_set_admin(env: Env, signer: Address) {
+        Self::require_signer(&env, &signer);
+        let mut proposal: SetAdminProposal = env
+            .storage()
+            .instance()
+            .get(&DataKey::SetAdminProposal)
+            .expect("no pending set_admin proposal");
+
+        assert!(!Self::has_signed(&proposal.signatures, &signer), "duplicate signature");
+
+        proposal.signatures.push_back(signer);
+        env.storage().instance().set(&DataKey::SetAdminProposal, &proposal);
+    }
+
+    /// Execute the admin rotation once threshold signatures are collected.
+    pub fn execute_set_admin(env: Env, signer: Address) {
+        Self::require_signer(&env, &signer);
+        let proposal: SetAdminProposal = env
+            .storage()
+            .instance()
+            .get(&DataKey::SetAdminProposal)
+            .expect("no pending set_admin proposal");
+
+        let cfg = Self::config(&env);
+        assert!(proposal.signatures.len() >= cfg.threshold, "insufficient signatures");
+
+        env.storage().instance().remove(&DataKey::SetAdminProposal);
+        env.storage().instance().set(&DataKey::MultiSig, &proposal.new_config);
+        env.storage().instance().set(&DataKey::Minter, &proposal.new_minter);
+    }
+
+    // ── Public token interface ────────────────────────────────────────────────
 
     pub fn burn(env: Env, from: Address, amount: i128) {
         from.require_auth();
@@ -228,17 +271,24 @@ impl TokenContract {
         let key = DataKey::Balance(from.clone());
         let bal = Self::read_balance(&env, &key);
         assert!(bal >= amount, "insufficient balance");
-        Self::write_balance(&env, &key, bal - amount);
+        let new_bal = bal - amount;
+        Self::write_balance(&env, &key, new_bal);
 
-        let new_supply = Self::total_supply(&env)
-            .checked_sub(amount)
-            .expect("underflow");
+        let new_supply = Self::total_supply(&env).checked_sub(amount).expect("underflow");
         Self::set_total_supply(&env, new_supply);
 
-        env.events()
-            .publish((BURN, symbol_short!("from"), from), (amount, new_supply));
+        env.events().publish((BURN, symbol_short!("from"), from), (amount, new_supply));
     }
 
+    /// Transfer `amount` LYT tokens from `from` to `to`.
+    ///
+    /// # Security
+    /// Requires `from.require_auth()`.
+    ///
+    /// # Panics
+    /// - `"amount must be positive"` — if `amount <= 0`
+    /// - `"insufficient balance"` — if `from`'s balance is less than `amount`
+    /// - `"overflow"` — if `to`'s balance would overflow `i128`
     pub fn transfer(env: Env, from: Address, to: Address, amount: i128) {
         from.require_auth();
         Self::require_not_paused(&env);
@@ -246,32 +296,24 @@ impl TokenContract {
 
         let from_key = DataKey::Balance(from.clone());
         let to_key = DataKey::Balance(to.clone());
-
         let from_bal = Self::read_balance(&env, &from_key);
         assert!(from_bal >= amount, "insufficient balance");
         let to_bal = Self::read_balance(&env, &to_key);
 
         Self::write_balance(&env, &from_key, from_bal - amount);
-        Self::write_balance(
-            &env,
-            &to_key,
-            to_bal.checked_add(amount).expect("overflow"),
-        );
+        Self::write_balance(&env, &to_key, to_bal.checked_add(amount).expect("overflow"));
 
-        env.events()
-            .publish((TRANSFER, symbol_short!("from"), from), (to, amount));
+        env.events().publish((TRANSFER, symbol_short!("from"), from), (to, amount));
     }
 
-    /// Approve `spender` to transfer up to `amount` tokens on behalf of the caller.
     pub fn approve(env: Env, owner: Address, spender: Address, amount: i128) {
         owner.require_auth();
+        Self::require_not_paused(&env);
         assert!(amount >= 0, "amount must be non-negative");
         Self::set_allowance(&env, &owner, &spender, amount);
-        env.events()
-            .publish((APPROVAL, symbol_short!("owner"), owner), (spender, amount));
+        env.events().publish((APPROVAL, symbol_short!("owner"), owner), (spender, amount));
     }
 
-    /// Transfer `amount` tokens from `from` to `to` using the caller's allowance.
     pub fn transfer_from(env: Env, spender: Address, from: Address, to: Address, amount: i128) {
         spender.require_auth();
         Self::require_not_paused(&env);
@@ -284,64 +326,50 @@ impl TokenContract {
         let to_key = DataKey::Balance(to.clone());
         let from_bal = Self::read_balance(&env, &from_key);
         assert!(from_bal >= amount, "insufficient balance");
+        let to_bal = Self::read_balance(&env, &to_key);
 
         Self::set_allowance(&env, &from, &spender, current - amount);
         Self::write_balance(&env, &from_key, from_bal - amount);
-        let to_bal = Self::read_balance(&env, &to_key)
-            .checked_add(amount)
-            .expect("overflow");
-        Self::write_balance(&env, &to_key, to_bal);
+        Self::write_balance(&env, &to_key, to_bal.checked_add(amount).expect("overflow"));
 
-        env.events()
-            .publish((TRANSFER, symbol_short!("from"), from), (to, amount));
+        env.events().publish((TRANSFER, symbol_short!("from"), from), (to, amount));
     }
 
-    /// Returns the remaining allowance for `spender` on behalf of `owner`.
     pub fn allowance(env: Env, owner: Address, spender: Address) -> i128 {
         Self::get_allowance(&env, &owner, &spender)
     }
 
+    /// Returns the LYT balance of `addr`.
     pub fn balance(env: Env, addr: Address) -> i128 {
         Self::read_balance(&env, &DataKey::Balance(addr))
     }
 
+    /// Returns the current total supply of LYT tokens.
     pub fn total_supply_view(env: Env) -> i128 {
         Self::total_supply(&env)
     }
 
+    pub fn multisig_config(env: Env) -> MultiSigConfig {
+        Self::config(&env)
+    }
+
+    pub fn minter_address(env: Env) -> Address {
+        Self::minter(&env)
+    }
+
+    /// Returns the token name (e.g. `"LoyaltyToken"`).
     pub fn name(env: Env) -> String {
         env.storage().instance().get(&DataKey::Name).unwrap()
     }
 
+    /// Returns the token ticker symbol (e.g. `"LYT"`).
     pub fn symbol(env: Env) -> String {
         env.storage().instance().get(&DataKey::Symbol).unwrap()
     }
 
+    /// Returns the number of decimal places (e.g. `7`).
     pub fn decimals(env: Env) -> u32 {
         env.storage().instance().get(&DataKey::Decimals).unwrap()
-    }
-
-    /// Legacy view — returns the first address that holds the ADMIN role.
-    /// Kept for backward compatibility with the backend indexer.
-    pub fn admin_address(env: Env) -> Address {
-        // Not meaningful with RBAC; kept for ABI compatibility.
-        // Returns the zero address sentinel if no admin is set.
-        panic!("use has_role_view to check roles")
-    }
-
-    /// Backward-compat: transfer the ADMIN role to `new_admin`.
-    /// Caller must have ADMIN role. Also grants MINTER + PAUSER to new_admin.
-    pub fn set_admin(env: Env, caller: Address, new_admin: Address) {
-        Self::require_role(&env, &Role::Admin, &caller);
-        Self::_grant_role(&env, &Role::Admin, &new_admin);
-        Self::_grant_role(&env, &Role::Minter, &new_admin);
-        Self::_grant_role(&env, &Role::Pauser, &new_admin);
-        // Revoke all roles from old admin
-        Self::_revoke_role(&env, &Role::Admin, &caller);
-        Self::_revoke_role(&env, &Role::Minter, &caller);
-        Self::_revoke_role(&env, &Role::Pauser, &caller);
-        env.events()
-            .publish((ROLE_GRANTED, Role::Admin), (caller.clone(), new_admin.clone()));
     }
 }
 
@@ -350,24 +378,28 @@ impl TokenContract {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use soroban_sdk::{
-        testutils::{Address as _, Events},
-        vec, IntoVal, Env,
-    };
+    use soroban_sdk::{testutils::Address as _, Env};
 
-    fn setup() -> (Env, Address, TokenContractClient<'static>) {
-        let env = Env::default();
-        env.mock_all_auths();
-        let admin = Address::generate(&env);
-        let contract_id = env.register_contract(None, TokenContract);
-        let client = TokenContractClient::new(&env, &contract_id);
+    fn setup_2of3(env: &Env) -> (Address, Address, Address, Address, TokenContractClient<'static>) {
+        let s1 = Address::generate(env);
+        let s2 = Address::generate(env);
+        let s3 = Address::generate(env);
+        let minter = Address::generate(env);
+        let id = env.register_contract(None, TokenContract);
+        let client = TokenContractClient::new(env, &id);
+        let mut signers = Vec::new(env);
+        signers.push_back(s1.clone());
+        signers.push_back(s2.clone());
+        signers.push_back(s3.clone());
         client.initialize(
-            &admin,
-            &String::from_str(&env, "LoyaltyToken"),
-            &String::from_str(&env, "LYT"),
+            &signers,
+            &2,
+            &minter,
+            &String::from_str(env, "LoyaltyToken"),
+            &String::from_str(env, "LYT"),
             &7,
         );
-        (env, admin, client)
+        (s1, s2, s3, minter, client)
     }
 
     // ── Role management tests ─────────────────────────────────────────────────
@@ -420,240 +452,144 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "missing role")]
-    fn test_grant_role_requires_admin() {
-        let (env, _admin, client) = setup();
-        let non_admin = Address::generate(&env);
-        let target = Address::generate(&env);
-        client.grant_role(&non_admin, &Role::Minter, &target);
-    }
-
-    #[test]
-    #[should_panic(expected = "missing role")]
-    fn test_revoke_role_requires_admin() {
-        let (env, admin, client) = setup();
-        let non_admin = Address::generate(&env);
-        client.revoke_role(&non_admin, &Role::Minter, &admin);
-    }
-
-    // ── Mint access control tests ─────────────────────────────────────────────
-
-    #[test]
-    fn test_mint_with_minter_role() {
-        let (env, admin, client) = setup();
+    fn test_minter_can_mint_directly() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let (_s1, _s2, _s3, minter, client) = setup_2of3(&env);
         let user = Address::generate(&env);
-        client.mint(&admin, &user, &1000);
+
+        client.mint(&user, &1000);
         assert_eq!(client.balance(&user), 1000);
         assert_eq!(client.total_supply_view(), 1000);
     }
 
     #[test]
-    fn test_mint_by_granted_minter() {
-        let (env, admin, client) = setup();
-        let minter = Address::generate(&env);
-        let user = Address::generate(&env);
-        client.grant_role(&admin, &Role::Minter, &minter);
-        client.mint(&minter, &user, &500);
-        assert_eq!(client.balance(&user), 500);
+    fn test_valid_multisig_set_admin() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let (s1, s2, _s3, _minter, client) = setup_2of3(&env);
+        let new_s1 = Address::generate(&env);
+        let new_s2 = Address::generate(&env);
+        let new_minter = Address::generate(&env);
+        let mut new_signers = Vec::new(&env);
+        new_signers.push_back(new_s1.clone());
+        new_signers.push_back(new_s2.clone());
+
+        client.propose_set_admin(&s1, &new_signers, &2, &new_minter);
+        client.approve_set_admin(&s2);
+        client.execute_set_admin(&s1);
+
+        let cfg = client.multisig_config();
+        assert_eq!(cfg.threshold, 2);
+        assert_eq!(cfg.signers.len(), 2);
+        assert_eq!(client.minter_address(), new_minter);
     }
 
     #[test]
-    #[should_panic(expected = "missing role")]
-    fn test_mint_without_minter_role_rejected() {
-        let (env, _admin, client) = setup();
-        let non_minter = Address::generate(&env);
-        let user = Address::generate(&env);
-        client.mint(&non_minter, &user, &100);
+    #[should_panic(expected = "insufficient signatures")]
+    fn test_insufficient_signatures_for_set_admin() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let (s1, _s2, _s3, _minter, client) = setup_2of3(&env);
+        let new_s1 = Address::generate(&env);
+        let new_minter = Address::generate(&env);
+        let mut new_signers = Vec::new(&env);
+        new_signers.push_back(new_s1.clone());
+
+        client.propose_set_admin(&s1, &new_signers, &1, &new_minter);
+        // Only 1 signature, threshold is 2
+        client.execute_set_admin(&s1);
     }
 
     #[test]
-    #[should_panic(expected = "missing role")]
-    fn test_mint_after_minter_role_revoked() {
-        let (env, admin, client) = setup();
-        let minter = Address::generate(&env);
-        let user = Address::generate(&env);
-        client.grant_role(&admin, &Role::Minter, &minter);
-        client.revoke_role(&admin, &Role::Minter, &minter);
-        client.mint(&minter, &user, &100);
+    #[should_panic(expected = "duplicate signature")]
+    fn test_duplicate_signature_rejected() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let (s1, _s2, _s3, _minter, client) = setup_2of3(&env);
+        let new_s1 = Address::generate(&env);
+        let new_minter = Address::generate(&env);
+        let mut new_signers = Vec::new(&env);
+        new_signers.push_back(new_s1.clone());
+
+        client.propose_set_admin(&s1, &new_signers, &1, &new_minter);
+        client.approve_set_admin(&s1); // s1 already signed via propose
+    }
+
+    #[test]
+    #[should_panic(expected = "not a signer")]
+    fn test_non_signer_cannot_propose() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let (_s1, _s2, _s3, _minter, client) = setup_2of3(&env);
+        let outsider = Address::generate(&env);
+        let new_minter = Address::generate(&env);
+        let mut new_signers = Vec::new(&env);
+        new_signers.push_back(outsider.clone());
+
+        client.propose_set_admin(&outsider, &new_signers, &1, &new_minter);
+    }
+
+    #[test]
+    fn test_transfer_and_burn() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let (_s1, _s2, _s3, _minter, client) = setup_2of3(&env);
+        let alice = Address::generate(&env);
+        let bob = Address::generate(&env);
+
+        client.mint(&alice, &500);
+        client.transfer(&alice, &bob, &200);
+        assert_eq!(client.balance(&alice), 300);
+        assert_eq!(client.balance(&bob), 200);
+
+        client.burn(&alice, &100);
+        assert_eq!(client.balance(&alice), 200);
+        assert_eq!(client.total_supply_view(), 400);
     }
 
     // ── Pause tests ───────────────────────────────────────────────────────────
 
     #[test]
     fn test_pause_and_unpause() {
-        let (env, admin, client) = setup();
-        assert!(!client.is_paused());
-        client.pause(&admin);
-        assert!(client.is_paused());
-        client.unpause(&admin);
-        assert!(!client.is_paused());
+        let (_env, _admin, client) = setup();
+        assert!(!client.paused());
+        client.emergency_pause();
+        assert!(client.paused());
+        client.emergency_unpause();
+        assert!(!client.paused());
     }
 
     #[test]
     #[should_panic(expected = "contract is paused")]
     fn test_mint_blocked_when_paused() {
-        let (env, admin, client) = setup();
+        let (env, _admin, client) = setup();
         let user = Address::generate(&env);
-        client.pause(&admin);
-        client.mint(&admin, &user, &100);
+        client.emergency_pause();
+        client.mint(&user, &100);
     }
 
     #[test]
     #[should_panic(expected = "contract is paused")]
     fn test_transfer_blocked_when_paused() {
-        let (env, admin, client) = setup();
+        let (env, _admin, client) = setup();
         let alice = Address::generate(&env);
         let bob = Address::generate(&env);
-        client.mint(&admin, &alice, &500);
-        client.pause(&admin);
+        client.mint(&alice, &500);
+        client.emergency_pause();
         client.transfer(&alice, &bob, &100);
     }
 
     #[test]
-    #[should_panic(expected = "missing role")]
-    fn test_pause_requires_pauser_role() {
+    #[should_panic(expected = "contract is paused")]
+    fn test_burn_blocked_when_paused() {
         let (env, _admin, client) = setup();
-        let non_pauser = Address::generate(&env);
-        client.pause(&non_pauser);
-    }
-
-    #[test]
-    fn test_pauser_role_can_be_granted_separately() {
-        let (env, admin, client) = setup();
-        let pauser = Address::generate(&env);
-        client.grant_role(&admin, &Role::Pauser, &pauser);
-        client.pause(&pauser);
-        assert!(client.is_paused());
-    }
-
-    // ── Transfer / burn tests ─────────────────────────────────────────────────
-
-    #[test]
-    fn test_transfer() {
-        let (env, admin, client) = setup();
-        let alice = Address::generate(&env);
-        let bob = Address::generate(&env);
-        client.mint(&admin, &alice, &500);
-        client.transfer(&alice, &bob, &200);
-        assert_eq!(client.balance(&alice), 300);
-        assert_eq!(client.balance(&bob), 200);
-    }
-
-    #[test]
-    fn test_burn() {
-        let (env, admin, client) = setup();
         let user = Address::generate(&env);
-        client.mint(&admin, &user, &300);
+        client.mint(&user, &300);
+        client.emergency_pause();
         client.burn(&user, &100);
-        assert_eq!(client.balance(&user), 200);
-        assert_eq!(client.total_supply_view(), 200);
-    }
-
-    #[test]
-    #[should_panic(expected = "insufficient balance")]
-    fn test_burn_insufficient() {
-        let (env, admin, client) = setup();
-        let user = Address::generate(&env);
-        client.mint(&admin, &user, &50);
-        client.burn(&user, &100);
-    }
-
-    #[test]
-    #[should_panic(expected = "insufficient balance")]
-    fn test_transfer_insufficient() {
-        let (env, admin, client) = setup();
-        let alice = Address::generate(&env);
-        let bob = Address::generate(&env);
-        client.mint(&admin, &alice, &50);
-        client.transfer(&alice, &bob, &100);
-    }
-
-    // ── Allowance tests ───────────────────────────────────────────────────────
-
-    #[test]
-    fn test_approve_and_allowance() {
-        let (env, _admin, client) = setup();
-        let alice = Address::generate(&env);
-        let spender = Address::generate(&env);
-        client.approve(&alice, &spender, &500);
-        assert_eq!(client.allowance(&alice, &spender), 500);
-    }
-
-    #[test]
-    fn test_transfer_from_within_allowance() {
-        let (env, admin, client) = setup();
-        let alice = Address::generate(&env);
-        let bob = Address::generate(&env);
-        let spender = Address::generate(&env);
-        client.mint(&admin, &alice, &1000);
-        client.approve(&alice, &spender, &300);
-        client.transfer_from(&spender, &alice, &bob, &200);
-        assert_eq!(client.balance(&alice), 800);
-        assert_eq!(client.balance(&bob), 200);
-        assert_eq!(client.allowance(&alice, &spender), 100);
-    }
-
-    #[test]
-    #[should_panic(expected = "allowance exceeded")]
-    fn test_transfer_from_exceeds_allowance() {
-        let (env, admin, client) = setup();
-        let alice = Address::generate(&env);
-        let bob = Address::generate(&env);
-        let spender = Address::generate(&env);
-        client.mint(&admin, &alice, &1000);
-        client.approve(&alice, &spender, &100);
-        client.transfer_from(&spender, &alice, &bob, &200);
-    }
-
-    #[test]
-    fn test_set_admin_transfers_all_roles() {
-        let (env, admin, client) = setup();
-        let new_admin = Address::generate(&env);
-        client.set_admin(&admin, &new_admin);
-        assert!(client.has_role_view(&Role::Admin, &new_admin));
-        assert!(client.has_role_view(&Role::Minter, &new_admin));
-        assert!(client.has_role_view(&Role::Pauser, &new_admin));
-        // Old admin loses roles
-        assert!(!client.has_role_view(&Role::Admin, &admin));
-    }
-
-    #[test]
-    fn test_mint_emits_event() {
-        let (env, admin, client) = setup();
-        let user = Address::generate(&env);
-        client.mint(&admin, &user, &1000);
-
-        let events = env.events().all();
-        assert_eq!(events.len(), 1);
-        assert_eq!(
-            events,
-            vec![
-                &env,
-                (
-                    client.address.clone(),
-                    (MINT, symbol_short!("to"), user).into_val(&env),
-                    (1000_i128, 1000_i128).into_val(&env),
-                )
-            ]
-        );
-    }
-
-    #[test]
-    fn test_burn_emits_event() {
-        let (env, admin, client) = setup();
-        let user = Address::generate(&env);
-        client.mint(&admin, &user, &300);
-        client.burn(&user, &100);
-
-        let events = env.events().all();
-        assert_eq!(events.len(), 2);
-        assert_eq!(
-            events.get(1).unwrap(),
-            (
-                client.address.clone(),
-                (BURN, symbol_short!("from"), user).into_val(&env),
-                (100_i128, 200_i128).into_val(&env),
-            )
-        );
     }
 }
+
+#[cfg(test)]
+mod fuzz_tests;

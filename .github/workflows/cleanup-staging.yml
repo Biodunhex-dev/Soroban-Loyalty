@@ -1,0 +1,41 @@
+name: Cleanup Inactive Staging
+
+on:
+  schedule:
+    - cron: '0 0 * * *' # Check daily at midnight
+
+jobs:
+  check-and-destroy:
+    runs-on: ubuntu-latest
+    environment: staging
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          aws-region: us-east-1
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+
+      - name: Check Staging Inactivity
+        id: check_traffic
+        run: |
+          # Check AWS CloudWatch for Application Load Balancer RequestCount over the last 7 days (604800 seconds)
+          INACTIVE=$(aws cloudwatch get-metric-statistics --namespace AWS/ApplicationELB --metric-name RequestCount --start-time $(date -d '7 days ago' -I) --end-time $(date -I) --period 604800 --statistics Sum --query 'Datapoints[0].Sum' --output text)
+          
+          if [ "$INACTIVE" == "None" ] || [ $(echo "$INACTIVE == 0" | bc) -eq 1 ]; then
+            echo "Environment inactive for 7 days. Proceeding with destroy."
+            echo "destroy=true" >> $GITHUB_OUTPUT
+          else
+            echo "Environment is active. Skipping destroy."
+            echo "destroy=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Terraform Destroy Staging
+        if: steps.check_traffic.outputs.destroy == 'true'
+        working-directory: infra/staging
+        run: |
+          terraform init
+          terraform destroy -auto-approve
+          # Associated slack step would follow here

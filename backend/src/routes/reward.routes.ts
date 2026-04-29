@@ -1,6 +1,8 @@
 import { Router, Request, Response } from "express";
 import { z } from "zod";
 import { createRewardClaim, DuplicateClaimError, getRewardsByUser } from "../services/reward.service";
+import { asyncHandler } from "../middleware/errorHandler";
+import { BadRequestError } from "../utils/errors";
 
 export const rewardRouter = Router();
 const ClaimSchema = z.object({
@@ -42,7 +44,7 @@ const ClaimSchema = z.object({
  *         description: Server error.
  */
 rewardRouter.get("/user/:address/rewards", asyncHandler(async (req: Request, res: Response) => {
-  const { address } = req.params;
+  const address = String(req.params.address);
   if (!address || address.length !== 56) {
     throw new BadRequestError("Invalid Stellar address", { address });
   }
@@ -52,14 +54,14 @@ rewardRouter.get("/user/:address/rewards", asyncHandler(async (req: Request, res
   } catch (err) {
     res.status(500).json({ error: "Failed to fetch rewards" });
   }
-});
+}));
 
 /**
  * POST /user/:address/rewards/claim
  * Inserts a reward claim once per (user, campaign). Duplicate claims return 409.
  */
 rewardRouter.post("/user/:address/rewards/claim", async (req: Request, res: Response) => {
-  const { address } = req.params;
+  const address = String(req.params.address);
   if (!address || address.length !== 56) {
     return res.status(400).json({ error: "Invalid Stellar address" });
   }

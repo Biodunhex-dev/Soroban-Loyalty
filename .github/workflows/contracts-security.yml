@@ -1,0 +1,61 @@
+name: Contracts Security
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "contracts/**"
+      - "scripts/check-contract-audit-readiness.sh"
+      - "docs/audits/**"
+      - ".github/workflows/contracts-security.yml"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "rust-toolchain.toml"
+  pull_request:
+    branches: [main]
+    paths:
+      - "contracts/**"
+      - "scripts/check-contract-audit-readiness.sh"
+      - "docs/audits/**"
+      - ".github/workflows/contracts-security.yml"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "rust-toolchain.toml"
+
+jobs:
+  contracts-ci:
+    name: Format, Lint, and Test Contracts
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@1.81.0
+        with:
+          targets: wasm32-unknown-unknown
+          components: rustfmt, clippy
+
+      - name: Cache cargo registry
+        uses: Swatinem/rust-cache@v2
+
+      - name: Check formatting
+        run: cargo fmt --all --check
+
+      - name: Lint contracts
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: Test contracts
+        run: cargo test --workspace
+
+  audit-readiness:
+    name: Audit Readiness Gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Validate audit status file
+        run: bash scripts/check-contract-audit-readiness.sh

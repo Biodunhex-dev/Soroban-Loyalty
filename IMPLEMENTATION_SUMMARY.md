@@ -159,6 +159,9 @@ git merge feature/csv-export-print-view-60
 
 # Merge contract upgrade mechanism
 git merge feat/contract-upgrade-timelock
+
+# Merge staging environment configuration
+git merge feature/staging-environment-78
 ```
 
 Or merge all at once:

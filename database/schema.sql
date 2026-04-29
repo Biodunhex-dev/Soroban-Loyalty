@@ -10,14 +10,17 @@ CREATE TABLE IF NOT EXISTS users (
 CREATE TABLE IF NOT EXISTS campaigns (
     id              BIGINT PRIMARY KEY,
     merchant        VARCHAR(56) NOT NULL,
+    name            VARCHAR(255),
     reward_amount   BIGINT NOT NULL,
     expiration      BIGINT NOT NULL,   -- unix timestamp
     active          BOOLEAN NOT NULL DEFAULT TRUE,
     total_claimed   BIGINT NOT NULL DEFAULT 0,
     display_order   INT NOT NULL DEFAULT 0,
     tx_hash         VARCHAR(64),
+    image_url       TEXT,
     created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    deleted_at      TIMESTAMPTZ
 );
 
 CREATE TABLE IF NOT EXISTS rewards (
@@ -48,3 +51,6 @@ CREATE INDEX IF NOT EXISTS idx_rewards_user_claimed_at ON rewards(user_address, 
 CREATE INDEX IF NOT EXISTS idx_rewards_campaign ON rewards(campaign_id);
 CREATE INDEX IF NOT EXISTS idx_transactions_user ON transactions(user_address);
 CREATE INDEX IF NOT EXISTS idx_campaigns_merchant ON campaigns(merchant);
+CREATE INDEX IF NOT EXISTS idx_campaigns_name ON campaigns(name);
+CREATE INDEX IF NOT EXISTS idx_campaigns_active ON campaigns(active);
+CREATE INDEX IF NOT EXISTS idx_campaigns_expiration ON campaigns(expiration);

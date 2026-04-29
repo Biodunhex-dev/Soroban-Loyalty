@@ -7,6 +7,7 @@ import { WalletConnector } from "@/components/WalletConnector";
 import { NetworkStatusIndicator } from "@/components/NetworkStatusIndicator";
 import { LanguageSwitcher } from "@/components/LanguageSwitcher";
 import { ThemeToggle } from "@/components/ThemeToggle";
+import { OnboardingModal } from "@/components/OnboardingModal";
 import "./globals.css";
 
 export const metadata: Metadata = {
@@ -43,6 +44,7 @@ function LayoutContent({ children }: { children: React.ReactNode }) {
         </div>
       </header>
       <main className="site-main">{children}</main>
+      <OnboardingModal />
     </>
   );
 }

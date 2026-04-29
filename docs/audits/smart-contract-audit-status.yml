@@ -1,0 +1,26 @@
+# Update this file as the external audit progresses.
+# Mainnet deployments are blocked until the required fields below are satisfied.
+
+audit:
+  name: "SorobanLoyalty Smart Contract Mainnet Audit"
+  scope_defined: true
+  auditor_firm: "TBD"
+  auditor_engaged: false
+  engagement_reference: "TBD"
+  covers_contracts:
+    - "contracts/token/src/lib.rs"
+    - "contracts/campaign/src/lib.rs"
+    - "contracts/rewards/src/lib.rs"
+  findings:
+    critical_open: 0
+    high_open: 0
+    medium_open: 0
+    medium_findings_dispositioned: false
+  public_report_published: false
+  public_report_path: "docs/audits/reports/README.md"
+  remediation_summary_path: "docs/audits/reports/README.md"
+  last_audit_report_date: "TBD"
+  last_audited_commit: "TBD"
+  significant_changes_since_last_audit: true
+  re_audit_required_after_significant_changes: true
+  accepted_medium_findings_rationale: "TBD"
