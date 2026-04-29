@@ -10,13 +10,13 @@ import { useNetworkStatus } from "@/hooks/useNetworkStatus";
 
 export function ClientShell({ children }: { children: React.ReactNode }) {
   return (
-    <WalletProvider>
-      <ToastProvider>
+    <ToastProvider>
+      <WalletProvider>
         <I18nProvider>
           <ShellContent>{children}</ShellContent>
         </I18nProvider>
-      </ToastProvider>
-    </WalletProvider>
+      </WalletProvider>
+    </ToastProvider>
   );
 }
 
