@@ -33,6 +33,7 @@ mod campaign {
         pub paused: bool,
         pub total_claimed: u64,
         pub vesting_period_days: u32,
+        pub max_claims: soroban_sdk::Option<u64>,
     }
 
     #[contractclient(name = "CampaignClient")]
@@ -61,7 +62,26 @@ pub enum DataKey {
     Admin,
     /// Vesting state for (user, campaign_id)
     Vesting(Address, u64),
+    /// Migration completion flag
+    MigrationV1Done,
+    /// Schema version (u32)
+    SchemaVersion,
+    /// Referral(user, campaign_id) → referrer Address
+    Referral(Address, u64),
 }
+
+// ── Claim record ──────────────────────────────────────────────────────────────
+
+#[contracttype]
+#[derive(Clone)]
+pub struct ClaimRecord {
+    pub amount: i128,
+    pub claimed_at: u64,
+}
+
+// ── Migration constant ────────────────────────────────────────────────────────
+
+const MIGRATED: Symbol = symbol_short!("MIGRATED");
 
 // ── Vesting state ─────────────────────────────────────────────────────────────
 
@@ -83,6 +103,7 @@ pub struct VestingState {
 const REWARD_CLAIMED: Symbol = symbol_short!("RWD_CLM");
 const REWARD_REDEEMED: Symbol = symbol_short!("RWD_RDM");
 const VESTED_CLAIMED: Symbol = symbol_short!("VST_CLM");
+const REFERRAL_CLAIMED: Symbol = symbol_short!("REF_CLM");
 
 // ── Contract ──────────────────────────────────────────────────────────────────
 
@@ -278,6 +299,98 @@ impl RewardsContract {
         env.events().publish(
             (REWARD_CLAIMED, symbol_short!("user"), user.clone()),
             (campaign_id, final_amount, multiplier_bp),
+        );
+    }
+
+    /// Claim a reward using a referral code.
+    /// - Referee receives 5% bonus LYT on top of the base reward.
+    /// - Referrer receives 10% bonus LYT.
+    /// - Each user can only be referred once per campaign.
+    /// - Self-referral is rejected.
+    pub fn claim_with_referral(env: Env, user: Address, campaign_id: u64, referrer: Address) {
+        user.require_auth();
+
+        assert!(user != referrer, "self-referral not allowed");
+
+        // Each user can only be referred once per campaign
+        let referral_key = DataKey::Referral(user.clone(), campaign_id);
+        assert!(
+            !env.storage().persistent().has(&referral_key),
+            "already referred for this campaign"
+        );
+
+        // Double-claim guard
+        assert!(
+            !Self::has_claimed(&env, &user, campaign_id),
+            "already claimed"
+        );
+
+        let campaign_client = Self::campaign_client(&env);
+        assert!(
+            campaign_client.is_active(&campaign_id),
+            "campaign not active"
+        );
+
+        let campaign: Campaign = campaign_client.get_campaign(&campaign_id);
+
+        // Write claimed state before external calls (reentrancy guard)
+        let record = ClaimRecord {
+            amount: 0,
+            claimed_at: env.ledger().timestamp(),
+        };
+        env.storage()
+            .persistent()
+            .set(&DataKey::Claimed(user.clone(), campaign_id), &record);
+
+        // Record referral relationship
+        env.storage().persistent().set(&referral_key, &referrer);
+
+        let multiplier_bp = Self::calc_multiplier(
+            env.ledger().timestamp(),
+            campaign.created_at,
+            campaign.expiration,
+        );
+        let base_amount = (campaign.reward_amount * multiplier_bp as i128) / 10_000;
+
+        // Referee gets 5% bonus
+        let referee_bonus = base_amount / 20;
+        let referee_amount = base_amount + referee_bonus;
+
+        // Referrer gets 10% bonus
+        let referrer_bonus = base_amount / 10;
+
+        campaign_client.record_claim(&campaign_id);
+
+        if campaign.vesting_period_days == 0 {
+            Self::token_client(&env).mint(&user, &referee_amount);
+            Self::token_client(&env).mint(&referrer, &referrer_bonus);
+        } else {
+            let vesting_duration_secs = campaign.vesting_period_days as u64 * 86_400;
+            let vesting = VestingState {
+                total_amount: referee_amount,
+                claimed_amount: 0,
+                start_time: env.ledger().timestamp(),
+                vesting_duration_secs,
+            };
+            env.storage()
+                .persistent()
+                .set(&DataKey::Vesting(user.clone(), campaign_id), &vesting);
+            // Referrer bonus minted immediately regardless of vesting
+            Self::token_client(&env).mint(&referrer, &referrer_bonus);
+        }
+
+        // Update record with actual amount
+        let record = ClaimRecord {
+            amount: referee_amount,
+            claimed_at: env.ledger().timestamp(),
+        };
+        env.storage()
+            .persistent()
+            .set(&DataKey::Claimed(user.clone(), campaign_id), &record);
+
+        env.events().publish(
+            (REFERRAL_CLAIMED, symbol_short!("user"), user.clone()),
+            (campaign_id, referee_amount, referrer.clone(), referrer_bonus),
         );
     }
 
@@ -487,14 +600,14 @@ mod tests {
         let expiry = t.env.ledger().timestamp() + 86400;
         let name = soroban_sdk::Bytes::from_slice(&t.env, b"Test Campaign");
         let desc = soroban_sdk::Bytes::from_slice(&t.env, b"Test description");
-        t.campaign.create_campaign(merchant, &reward, &expiry, &name, &desc, &0)
+        t.campaign.create_campaign(merchant, &reward, &expiry, &name, &desc, &0, &soroban_sdk::Option::None)
     }
 
     fn make_vesting_campaign(t: &TestSetup, merchant: &Address, reward: i128, vesting_days: u32) -> u64 {
         let expiry = t.env.ledger().timestamp() + 86400;
         let name = soroban_sdk::Bytes::from_slice(&t.env, b"Vesting Campaign");
         let desc = soroban_sdk::Bytes::from_slice(&t.env, b"Vesting test");
-        t.campaign.create_campaign(merchant, &reward, &expiry, &name, &desc, &vesting_days)
+        t.campaign.create_campaign(merchant, &reward, &expiry, &name, &desc, &vesting_days, &soroban_sdk::Option::None)
     }
 
     #[test]
@@ -547,7 +660,7 @@ mod tests {
         let expiry = t.env.ledger().timestamp() + 10;
         let name = soroban_sdk::Bytes::from_slice(&t.env, b"Test Campaign");
         let desc = soroban_sdk::Bytes::from_slice(&t.env, b"Test description");
-        let cid = t.campaign.create_campaign(&merchant, &500, &expiry, &name, &desc, &0);
+        let cid = t.campaign.create_campaign(&merchant, &500, &expiry, &name, &desc, &0, &soroban_sdk::Option::None);
         t.env.ledger().with_mut(|l| l.timestamp = expiry + 1);
         t.rewards.claim_reward(&user, &cid);
     }
@@ -689,7 +802,7 @@ mod tests {
         let reward_amount = 1000_i128;
 
         // 1. Create active campaign
-        let campaign_id = t.campaign.create_campaign(&merchant, &reward_amount, &expiry, &soroban_sdk::Bytes::from_slice(&t.env, b"Test"), &soroban_sdk::Bytes::from_slice(&t.env, b"Test"), &0);
+        let campaign_id = t.campaign.create_campaign(&merchant, &reward_amount, &expiry, &soroban_sdk::Bytes::from_slice(&t.env, b"Test"), &soroban_sdk::Bytes::from_slice(&t.env, b"Test"), &0, &soroban_sdk::Option::None);
         assert!(t.campaign.is_active(&campaign_id));
 
         t.rewards.claim_reward(&user, &campaign_id);
@@ -708,7 +821,7 @@ mod tests {
         let redeem_amount = 300_i128;
 
         // Setup: User has claimed rewards
-        let campaign_id = t.campaign.create_campaign(&merchant, &reward_amount, &expiry, &soroban_sdk::Bytes::from_slice(&t.env, b"Test"), &soroban_sdk::Bytes::from_slice(&t.env, b"Test"), &0);
+        let campaign_id = t.campaign.create_campaign(&merchant, &reward_amount, &expiry, &soroban_sdk::Bytes::from_slice(&t.env, b"Test"), &soroban_sdk::Bytes::from_slice(&t.env, b"Test"), &0, &soroban_sdk::Option::None);
         t.rewards.claim_reward(&user, &campaign_id);
 
         t.rewards.redeem_reward(&user, &redeem_amount);
@@ -727,8 +840,8 @@ mod tests {
         let user2 = Address::generate(&t.env);
 
         // Create two campaigns with different reward amounts
-        let campaign1_id = t.campaign.create_campaign(&merchant1, &100, &expiry, &soroban_sdk::Bytes::from_slice(&t.env, b"C1"), &soroban_sdk::Bytes::from_slice(&t.env, b"C1"), &0);
-        let campaign2_id = t.campaign.create_campaign(&merchant2, &200, &expiry, &soroban_sdk::Bytes::from_slice(&t.env, b"C2"), &soroban_sdk::Bytes::from_slice(&t.env, b"C2"), &0);
+        let campaign1_id = t.campaign.create_campaign(&merchant1, &100, &expiry, &soroban_sdk::Bytes::from_slice(&t.env, b"C1"), &soroban_sdk::Bytes::from_slice(&t.env, b"C1"), &0, &soroban_sdk::Option::None);
+        let campaign2_id = t.campaign.create_campaign(&merchant2, &200, &expiry, &soroban_sdk::Bytes::from_slice(&t.env, b"C2"), &soroban_sdk::Bytes::from_slice(&t.env, b"C2"), &0, &soroban_sdk::Option::None);
 
         t.rewards.claim_reward(&user1, &campaign1_id);
         t.rewards.claim_reward(&user1, &campaign2_id);
@@ -760,7 +873,7 @@ mod tests {
         let desc = soroban_sdk::Bytes::from_slice(&t.env, b"Test");
         let campaign_id = t.campaign.create_campaign(&merchant, &500, &short_expiry, &name, &desc);
 
-        let campaign_id = t.campaign.create_campaign(&merchant, &500, &short_expiry, &soroban_sdk::Bytes::from_slice(&t.env, b"Test"), &soroban_sdk::Bytes::from_slice(&t.env, b"Test"), &0);
+        let campaign_id = t.campaign.create_campaign(&merchant, &500, &short_expiry, &soroban_sdk::Bytes::from_slice(&t.env, b"Test"), &soroban_sdk::Bytes::from_slice(&t.env, b"Test"), &0, &soroban_sdk::Option::None);
         
         // User1 claims before expiry - should succeed
         t.rewards.claim_reward(&user1, &campaign_id);
@@ -777,7 +890,7 @@ mod tests {
         let merchant = Address::generate(&t.env);
         let user = Address::generate(&t.env);
 
-        let campaign_id = t.campaign.create_campaign(&merchant, &500, &expiry, &soroban_sdk::Bytes::from_slice(&t.env, b"Test"), &soroban_sdk::Bytes::from_slice(&t.env, b"Test"), &0);
+        let campaign_id = t.campaign.create_campaign(&merchant, &500, &expiry, &soroban_sdk::Bytes::from_slice(&t.env, b"Test"), &soroban_sdk::Bytes::from_slice(&t.env, b"Test"), &0, &soroban_sdk::Option::None);
         
         // Deactivate campaign via campaign contract
         t.campaign.set_active(&campaign_id, &false);
@@ -869,5 +982,62 @@ mod tests {
             supply_before - redeem_amount,
             "invariant: total_supply decreases by redeem amount"
         );
+    }
+
+    // ── Referral Tests (Issue #130) ───────────────────────────────────────────
+
+    #[test]
+    fn test_referral_bonuses() {
+        let t = setup();
+        let merchant = Address::generate(&t.env);
+        let user = Address::generate(&t.env);
+        let referrer = Address::generate(&t.env);
+
+        let cid = make_campaign(&t, &merchant, 1000);
+        // Give referrer some tokens first (so they can be a referrer)
+        t.rewards.claim_reward(&referrer, &cid);
+        let referrer_base = t.token.balance(&referrer);
+
+        let cid2 = make_campaign(&t, &merchant, 1000);
+        t.rewards.claim_with_referral(&user, &cid2, &referrer);
+
+        // Base at t=0 is 2x → 2000; referee gets +5% = 2100
+        let base = 2000_i128;
+        let referee_expected = base + base / 20; // 2100
+        let referrer_bonus = base / 10; // 200
+
+        assert_eq!(t.token.balance(&user), referee_expected);
+        assert_eq!(t.token.balance(&referrer), referrer_base + referrer_bonus);
+    }
+
+    #[test]
+    #[should_panic(expected = "self-referral not allowed")]
+    fn test_self_referral_rejected() {
+        let t = setup();
+        let merchant = Address::generate(&t.env);
+        let user = Address::generate(&t.env);
+
+        let cid = make_campaign(&t, &merchant, 1000);
+        t.rewards.claim_with_referral(&user, &cid, &user);
+    }
+
+    #[test]
+    #[should_panic(expected = "already referred for this campaign")]
+    fn test_duplicate_referral_rejected() {
+        let t = setup();
+        let merchant = Address::generate(&t.env);
+        let user = Address::generate(&t.env);
+        let referrer = Address::generate(&t.env);
+
+        let cid = make_campaign(&t, &merchant, 1000);
+        t.rewards.claim_with_referral(&user, &cid, &referrer);
+        // Second referral attempt for same user/campaign should fail
+        // (user already claimed, so "already claimed" fires first — but
+        //  the referral key check fires before the claim check)
+        let cid2 = make_campaign(&t, &merchant, 1000);
+        // Simulate: user tries to use referral again on a new campaign
+        // but we test the duplicate referral key specifically
+        // by directly calling again on same campaign
+        t.rewards.claim_with_referral(&user, &cid, &referrer);
     }
 }
