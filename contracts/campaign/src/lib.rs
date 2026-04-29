@@ -32,6 +32,8 @@ pub struct Campaign {
     pub description: Bytes,
     /// Optional linear vesting period in days (0 = no vesting, immediate release)
     pub vesting_period_days: u32,
+    /// Optional hard cap on total claims. None = unlimited.
+    pub max_claims: soroban_sdk::Option<u64>,
 }
 
 #[contracttype]
@@ -65,6 +67,15 @@ const UPGRADE_CANCELLED: Symbol = symbol_short!("UPG_CNCL");
 
 /// 48-hour timelock for upgrades (in seconds).
 const TIMELOCK: u64 = 172_800;
+
+// ── Upgrade constants ─────────────────────────────────────────────────────────
+
+/// 48-hour timelock before upgrade execution.
+const TIMELOCK: u64 = 48 * 60 * 60;
+const UPGRADE_PROPOSED: Symbol = symbol_short!("UPG_PROP");
+const UPGRADE_AUTHORIZED: Symbol = symbol_short!("UPG_AUTH");
+const UPGRADE_EXECUTED: Symbol = symbol_short!("UPG_EXEC");
+const UPGRADE_CANCELLED: Symbol = symbol_short!("UPG_CNCL");
 
 // ── Contract ──────────────────────────────────────────────────────────────────
 
@@ -146,6 +157,7 @@ impl CampaignContract {
     /// Create a new campaign. Only the merchant (caller) can create it.
     /// `name` max 64 bytes, `description` max 256 bytes.
     /// `vesting_period_days` = 0 means no vesting (immediate release).
+    /// `max_claims` = None means unlimited claims.
     pub fn create_campaign(
         env: Env,
         merchant: Address,
@@ -154,6 +166,7 @@ impl CampaignContract {
         name: Bytes,
         description: Bytes,
         vesting_period_days: u32,
+        max_claims: soroban_sdk::Option<u64>,
     ) -> u64 {
         merchant.require_auth();
         Self::require_not_paused(&env);
@@ -177,6 +190,7 @@ impl CampaignContract {
             name: name.clone(),
             description: description.clone(),
             vesting_period_days,
+            max_claims,
         };
         env.storage()
             .persistent()
@@ -450,10 +464,10 @@ mod tests {
 
     #[test]
     fn test_create_campaign() {
-        let (env, admin1, _admin2, client) = setup();
+        let (env, _admin1, _admin2, client) = setup();
         let merchant = Address::generate(&env);
         let expiry = env.ledger().timestamp() + 86400;
-        let id = client.create_campaign(&merchant, &100, &expiry, &name(&env), &desc(&env), &0);
+        let id = client.create_campaign(&merchant, &100, &expiry, &name(&env), &desc(&env), &0, &soroban_sdk::Option::None);
         assert_eq!(id, 1);
         let c = client.get_campaign(&id);
         assert_eq!(c.merchant, merchant);
@@ -461,6 +475,7 @@ mod tests {
         assert!(c.active);
         assert_eq!(c.name, name(&env));
         assert_eq!(c.description, desc(&env));
+        assert_eq!(c.max_claims, soroban_sdk::Option::None);
     }
 
     #[test]
@@ -468,7 +483,7 @@ mod tests {
         let (env, _admin1, _admin2, client) = setup();
         let merchant = Address::generate(&env);
         let expiry = env.ledger().timestamp() + 86400;
-        let id = client.create_campaign(&merchant, &100, &expiry, &name(&env), &desc(&env), &0);
+        let id = client.create_campaign(&merchant, &100, &expiry, &name(&env), &desc(&env), &0, &soroban_sdk::Option::None);
         let (n, d) = client.get_campaign_metadata(&id);
         assert_eq!(n, name(&env));
         assert_eq!(d, desc(&env));
@@ -481,7 +496,7 @@ mod tests {
         let merchant = Address::generate(&env);
         let expiry = env.ledger().timestamp() + 86400;
         let long_name = Bytes::from_slice(env, &[b'x'; 65]);
-        client.create_campaign(&merchant, &100, &expiry, &long_name, &desc(&env), &0);
+        client.create_campaign(&merchant, &100, &expiry, &long_name, &desc(&env), &0, &soroban_sdk::Option::None);
     }
 
     #[test]
@@ -491,15 +506,15 @@ mod tests {
         let merchant = Address::generate(&env);
         let expiry = env.ledger().timestamp() + 86400;
         let long_desc = Bytes::from_slice(env, &[b'd'; 257]);
-        client.create_campaign(&merchant, &100, &expiry, &name(&env), &long_desc, &0);
+        client.create_campaign(&merchant, &100, &expiry, &name(&env), &long_desc, &0, &soroban_sdk::Option::None);
     }
 
     #[test]
     #[should_panic(expected = "expiration must be in the future")]
     fn test_expired_campaign_rejected() {
-        let (env, admin1, _admin2, client) = setup();
+        let (env, _admin1, _admin2, client) = setup();
         let merchant = Address::generate(&env);
-        client.create_campaign(&merchant, &100, &0, &name(&env), &desc(&env), &0);
+        client.create_campaign(&merchant, &100, &0, &name(&env), &desc(&env), &0, &soroban_sdk::Option::None);
     }
 
     #[test]
@@ -507,7 +522,7 @@ mod tests {
         let (env, _admin1, _admin2, client) = setup();
         let merchant = Address::generate(&env);
         let expiry = env.ledger().timestamp() + 86400;
-        let id = client.create_campaign(&merchant, &100, &expiry, &name(&env), &desc(&env), &0);
+        let id = client.create_campaign(&merchant, &100, &expiry, &name(&env), &desc(&env), &0, &soroban_sdk::Option::None);
         client.set_active(&id, &false);
         assert!(!client.get_campaign(&id).active);
     }
@@ -517,7 +532,7 @@ mod tests {
         let (env, _admin1, _admin2, client) = setup();
         let merchant = Address::generate(&env);
         let expiry = env.ledger().timestamp() + 86400;
-        let id = client.create_campaign(&merchant, &100, &expiry, &name(&env), &desc(&env), &0);
+        let id = client.create_campaign(&merchant, &100, &expiry, &name(&env), &desc(&env), &0, &soroban_sdk::Option::None);
         client.set_active(&id, &false);
         assert!(!client.get_campaign(&id).active);
         client.set_active(&id, &true);
@@ -526,15 +541,55 @@ mod tests {
 
     #[test]
     fn test_is_active_after_expiry() {
-        let (env, admin1, _admin2, client) = setup();
+        let (env, _admin1, _admin2, client) = setup();
         let merchant = Address::generate(&env);
         let expiry = env.ledger().timestamp() + 10;
-        let id = client.create_campaign(&merchant, &100, &expiry, &name(&env), &desc(&env), &0);
+        let id = client.create_campaign(&merchant, &100, &expiry, &name(&env), &desc(&env), &0, &soroban_sdk::Option::None);
         assert!(client.is_active(&id));
 
         env.ledger().with_mut(|l| l.timestamp = expiry + 1);
         assert!(!client.is_active(&id));
     }
+
+    // ── max_claims tests ──────────────────────────────────────────────────────
+
+    #[test]
+    fn test_max_claims_no_cap() {
+        let (env, _admin1, _admin2, client) = setup();
+        let merchant = Address::generate(&env);
+        let expiry = env.ledger().timestamp() + 86400;
+        let id = client.create_campaign(&merchant, &100, &expiry, &name(&env), &desc(&env), &0, &soroban_sdk::Option::None);
+        // record_claim can be called many times without cap
+        client.record_claim(&id);
+        client.record_claim(&id);
+        assert_eq!(client.get_campaign(&id).total_claimed, 2);
+    }
+
+    #[test]
+    fn test_max_claims_at_cap() {
+        let (env, _admin1, _admin2, client) = setup();
+        let merchant = Address::generate(&env);
+        let expiry = env.ledger().timestamp() + 86400;
+        let id = client.create_campaign(&merchant, &100, &expiry, &name(&env), &desc(&env), &0, &soroban_sdk::Option::Some(2));
+        client.record_claim(&id);
+        client.record_claim(&id);
+        assert_eq!(client.get_campaign(&id).total_claimed, 2);
+    }
+
+    #[test]
+    #[should_panic(expected = "max_claims reached")]
+    fn test_max_claims_over_cap() {
+        let (env, _admin1, _admin2, client) = setup();
+        let merchant = Address::generate(&env);
+        let expiry = env.ledger().timestamp() + 86400;
+        let id = client.create_campaign(&merchant, &100, &expiry, &name(&env), &desc(&env), &0, &soroban_sdk::Option::Some(2));
+        client.record_claim(&id);
+        client.record_claim(&id);
+        // Third claim should panic
+        client.record_claim(&id);
+    }
+
+    // ── Upgrade tests ─────────────────────────────────────────────────────────
 
     #[test]
     #[ignore = "requires actual WASM upload; not testable in unit test environment"]
@@ -571,7 +626,7 @@ mod tests {
     #[test]
     #[should_panic(expected = "insufficient authorizations")]
     fn test_upgrade_threshold_enforced() {
-        let (env, admin1, admin2, client) = setup();
+        let (env, admin1, _admin2, client) = setup();
         let wasm_hash = soroban_sdk::BytesN::from_array(&env, &[0u8; 32]);
 
         client.propose_upgrade(&admin1, &wasm_hash);
