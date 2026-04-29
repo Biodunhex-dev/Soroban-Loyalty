@@ -3,6 +3,7 @@
 import { useState } from "react";
 import Link from "next/link";
 import { Campaign } from "@/lib/api";
+import { ConfirmDialog } from "./ConfirmDialog";
 
 type SortKey = "id" | "reward_amount" | "total_claimed" | "expiration";
 type SortDir = "asc" | "desc";
@@ -122,34 +123,14 @@ export function CampaignTable({ campaigns, onDeactivate }: Props) {
                   </td>
                   {onDeactivate && (
                     <td style={{ padding: "10px 12px" }}>
-                      {confirmId === c.id ? (
-                        <span style={{ display: "flex", gap: 6 }}>
-                          <button
-                            className="btn btn-outline"
-                            style={{ padding: "4px 10px", fontSize: "0.75rem" }}
-                            onClick={() => setConfirmId(null)}
-                          >
-                            Cancel
-                          </button>
-                          <button
-                            className="btn btn-primary"
-                            style={{ padding: "4px 10px", fontSize: "0.75rem", background: "#dc2626" }}
-                            disabled={deactivating === c.id}
-                            onClick={() => handleDeactivate(c.id)}
-                          >
-                            {deactivating === c.id ? "…" : "Confirm"}
-                          </button>
-                        </span>
-                      ) : (
-                        <button
-                          className="btn btn-outline"
-                          style={{ padding: "4px 10px", fontSize: "0.75rem" }}
-                          disabled={!c.active}
-                          onClick={() => setConfirmId(c.id)}
-                        >
-                          Deactivate
-                        </button>
-                      )}
+                      <button
+                        className="btn btn-outline"
+                        style={{ padding: "4px 10px", fontSize: "0.75rem" }}
+                        disabled={!c.active}
+                        onClick={() => setConfirmId(c.id)}
+                      >
+                        Deactivate
+                      </button>
                     </td>
                   )}
                 </tr>
@@ -170,6 +151,16 @@ export function CampaignTable({ campaigns, onDeactivate }: Props) {
           </button>
         </div>
       )}
+
+      <ConfirmDialog
+        open={confirmId !== null}
+        title="Deactivate campaign?"
+        description={`Campaign #${confirmId} will be deactivated immediately. Users will no longer be able to claim rewards. This cannot be undone from this interface.`}
+        confirmLabel="Deactivate"
+        loading={deactivating !== null}
+        onConfirm={() => confirmId !== null && handleDeactivate(confirmId)}
+        onCancel={() => setConfirmId(null)}
+      />
     </div>
   );
 }
