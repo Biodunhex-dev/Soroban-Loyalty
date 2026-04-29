@@ -3,6 +3,9 @@
 import React, { createContext, useCallback, useContext, useEffect, useState } from "react";
 import { connectWallet, getPublicKey } from "@/lib/freighter";
 import { api } from "@/lib/api";
+import { useToast } from "@/context/ToastContext";
+
+const WALLET_STORAGE_KEY = "soroban_wallet_public_key";
 
 interface WalletCtx {
   publicKey: string | null;
@@ -27,6 +30,7 @@ export const WalletContext = createContext<WalletCtx>({
 });
 
 export function WalletProvider({ children }: { children: React.ReactNode }) {
+  const { toast } = useToast();
   const [publicKey, setPublicKey] = useState<string | null>(null);
   const [connecting, setConnecting] = useState(false);
   const [lytBalance, setLytBalance] = useState(0);
@@ -61,7 +65,37 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
 
   useEffect(() => {
     setMounted(true);
-    getPublicKey().then(setPublicKey);
+
+    if (typeof window === "undefined") return;
+
+    const storedKey = localStorage.getItem(WALLET_STORAGE_KEY);
+    if (!storedKey) return;
+
+    void getPublicKey().then((authorizedKey) => {
+      // Silent failure path (e.g. Freighter locked): do not toast.
+      if (!authorizedKey) {
+        setPublicKey(null);
+        localStorage.removeItem(WALLET_STORAGE_KEY);
+        return;
+      }
+
+      setPublicKey(authorizedKey);
+      if (authorizedKey !== storedKey) {
+        localStorage.setItem(WALLET_STORAGE_KEY, authorizedKey);
+      }
+    });
+  }, []);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+
+    const onStorage = (event: StorageEvent) => {
+      if (event.key !== WALLET_STORAGE_KEY) return;
+      setPublicKey(event.newValue || null);
+    };
+
+    window.addEventListener("storage", onStorage);
+    return () => window.removeEventListener("storage", onStorage);
   }, []);
 
   useEffect(() => {
@@ -96,6 +130,9 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
     try {
       const key = await connectWallet();
       setPublicKey(key);
+      if (typeof window !== "undefined") {
+        localStorage.setItem(WALLET_STORAGE_KEY, key);
+      }
       toast(`Wallet connected: ${key.slice(0, 6)}...${key.slice(-4)}`, 'success');
     } catch (error: unknown) {
       const errorMessage = error instanceof Error ? error.message : 'Failed to connect wallet';
@@ -108,6 +145,9 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
 
   const disconnect = useCallback(() => {
     setPublicKey(null);
+    if (typeof window !== "undefined") {
+      localStorage.removeItem(WALLET_STORAGE_KEY);
+    }
     toast('Wallet disconnected', 'info');
   }, [toast]);
 

@@ -57,11 +57,11 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
       </head>
       <body>
         <I18nProvider>
-          <WalletProvider>
-            <ToastProvider>
+          <ToastProvider>
+            <WalletProvider>
               <LayoutContent>{children}</LayoutContent>
-            </ToastProvider>
-          </WalletProvider>
+            </WalletProvider>
+          </ToastProvider>
         </I18nProvider>
       </body>
     </html>
